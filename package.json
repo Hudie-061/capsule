@@ -1,0 +1,30 @@
+{
+  "name": "capsule-wardrobe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capsule wardrobe app (fork of tandpfun/wardrobe) using Gemini through a private proxy.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "android": "npm run build && npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@fontsource-variable/instrument-sans": "^5.2.8",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@vitejs/plugin-react": "5.0.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vite": "^6.4.6"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
+    "vitest": "^5.1.0"
+  }
+}

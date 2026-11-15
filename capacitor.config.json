@@ -1,0 +1,7 @@
+{
+  "appId": "app.capsule.wardrobe",
+  "appName": "Capsule",
+  "webDir": "dist",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false }
+}

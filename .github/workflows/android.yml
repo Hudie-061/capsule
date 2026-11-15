@@ -1,0 +1,49 @@
+name: Android APK
+
+# Run manually from the Actions tab, or push a tag like v1.0.0 to also publish a release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - run: npm test
+      - name: Build web app
+        run: npm run build
+        env:
+          VITE_PROXY_URL: ${{ vars.PROXY_URL }}
+      - name: Create Android project
+        run: |
+          npx cap add android
+          npx cap sync android
+          bash scripts/android-icons.sh
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk capsule.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capsule-apk
+          path: capsule.apk
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" capsule.apk --title "Capsule $GITHUB_REF_NAME" --notes "APK для Android. Установка — см. README."
