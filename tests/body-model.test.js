@@ -26,7 +26,14 @@ describe("3D body from measurements", () => {
       console.log(p, Math.round(ms), "ms", Object.fromEntries(Object.entries(body.rings).map(([k, r]) => [k, `${r.girth.toFixed(1)} / ${m[k]}`])), "inseam", body.crotch[1].toFixed(1), "/", m.inseam, "height", (max - min).toFixed(1));
       expect(max - min).toBeCloseTo(p.height, 0);
       expect(Math.abs(body.crotch[1] - m.inseam)).toBeLessThan(1.5);
-      for (const id of ["chest", "waist", "hips", "neck"]) expect(Math.abs(body.rings[id].girth - m[id])).toBeLessThan(1.5);
+      // shapes are not stretched far past their design range (that made bulges), so a very full waist
+      // (BMI over 30) may come out a few centimetres smaller; everything else matches the tape
+      const bmi = p.weight / (p.height / 100) ** 2;
+      for (const id of ["chest", "waist", "hips", "neck"]) expect(Math.abs(body.rings[id].girth - m[id])).toBeLessThan(id === "waist" && bmi > 30 ? 5 : 1.5);
+      // the hip tape goes round the fullest part of the buttocks, above the crotch
+      expect(body.rings.hips.y - body.crotch[1]).toBeGreaterThan(0.03 * p.height);
+      // no shape is pushed beyond 1.5× its design range
+      for (const [name, value] of Object.entries(body.weights)) if (!/weight$/.test(name)) expect(Math.abs(value)).toBeLessThanOrEqual(1.5 + 1e-6);
     });
   }
 

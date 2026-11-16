@@ -173,25 +173,25 @@ export function fitBody(model, m) {
   const female = m.gender === "female" ? 1 : m.gender === "male" ? 0 : 0.5;
   shape.set("female", female);
   shape.set("male", 1 - female);
-  // MakeHuman weight 0…1 (0.5 = average) from BMI
+  // MakeHuman's whole-body weight, 0…1 (0.5 = average; up to 1.5 for a fuller body). It changes
+  // belly, hips, arms, legs and face together, so a heavier body grows smoothly.
+  const setWeight = (w) => {
+    for (const [g, share] of [["f", female], ["m", 1 - female]]) {
+      shape.set(`${g}-minweight`, share * Math.max(0, (0.5 - w) * 2));
+      shape.set(`${g}-maxweight`, share * Math.max(0, (w - 0.5) * 2));
+    }
+  };
   const bmi = m.weight / ((m.height / 100) ** 2);
-  const w = Math.min(1, Math.max(0, bmi < 22 ? 0.5 - (22 - bmi) / 10 : 0.5 + (bmi - 22) / 16));
-  for (const [g, share] of [["f", female], ["m", 1 - female]]) {
-    shape.set(`${g}-minweight`, share * Math.max(0, (0.5 - w) * 2));
-    shape.set(`${g}-maxweight`, share * Math.max(0, (w - 0.5) * 2));
-  }
+  setWeight(Math.min(1, Math.max(0, bmi < 22 ? 0.5 - (22 - bmi) / 10 : 0.5 + (bmi - 22) / 16)));
 
-  // inside leg as a share of height (scale-free), then the scale to the exact height
-  const legShare = () => { const [min, max] = yRange(shape.pos, n); const c = crotchOf(shape.pos, n, min, max - min); return c ? (c[1] - min) / (max - min) : 0.45; };
-  shape.measure("upperleg-height", solve((v) => { shape.measure("upperleg-height", v); return legShare() * 100; }, (m.inseam / m.height) * 100, -1.5, 1.5));
-  let [min, max] = yRange(shape.pos, n);
-  const s = m.height / (max - min);
-  const H = max - min;
+  // inside leg as a share of height (scale-free)
+  const legShare = () => { const [lo, hi] = yRange(shape.pos, n); const c = crotchOf(shape.pos, n, lo, hi - lo); return c ? (c[1] - lo) / (hi - lo) : 0.45; };
+  const fitLegs = () => shape.measure("upperleg-height", solve((v) => { shape.measure("upperleg-height", v); return legShare() * 100; }, (m.inseam / m.height) * 100, -1.5, 1.5));
 
-  // where each girth is taken, found once on this body
+  // the scale to the exact height and where each girth is taken on this body
+  let min; let max; let s; let H; let crotch; let levels; let bands;
   const at = (share) => min + share * H;
   const near = (y) => trianglesNear(shape.pos, model.body, y, 0.04 * H);
-  const crotch = crotchOf(shape.pos, n, min, H);
   const scan = (from, to, pick) => {
     let best = null;
     for (let i = 0; i <= 6; i += 1) {
@@ -201,19 +201,42 @@ export function fitBody(model, m) {
     }
     return best.y;
   };
-  let bust = at(0.72); let front = -Infinity;
-  for (let i = 0; i < n; i += 1) {
-    const y = shape.pos[i * 3 + 1]; const z = shape.pos[i * 3 + 2];
-    if (y > at(0.66) && y < at(0.78) && Math.abs(shape.pos[i * 3]) < 0.12 * H && z > front) { front = z; bust = y; }
-  }
-  const levels = {
-    hips: scan(crotch[1] + 0.02 * H, crotch[1] + 0.12 * H, (g, b) => g > b),
-    waist: scan(at(0.57), at(0.66), (g, b) => g < b),
-    chest: bust,
-    neck: scan(at(0.82), at(0.865), (g, b) => g < b),
+  // the most forward (bust) or most backward (buttocks) point near the middle line
+  const extreme = (from, to, sign) => {
+    let y0 = (from + to) / 2; let best = -Infinity;
+    for (let i = 0; i < n; i += 1) {
+      const y = shape.pos[i * 3 + 1]; const z = sign * shape.pos[i * 3 + 2];
+      if (y > from && y < to && Math.abs(shape.pos[i * 3]) < 0.08 * H && z > best) { best = z; y0 = y; }
+    }
+    return y0;
   };
-  const bands = Object.fromEntries(Object.entries(levels).map(([id, y]) => [id, near(y)]));
+  const frame = () => {
+    [min, max] = yRange(shape.pos, n);
+    H = max - min;
+    s = m.height / H;
+    crotch = crotchOf(shape.pos, n, min, H);
+    levels = {
+      hips: extreme(crotch[1] + 0.01 * H, crotch[1] + 0.1 * H, -1), // the fullest part of the buttocks
+      waist: scan(at(0.57), at(0.66), (g, b) => g < b),
+      chest: extreme(at(0.66), at(0.78), 1),
+      neck: scan(at(0.82), at(0.865), (g, b) => g < b),
+    };
+    bands = Object.fromEntries(Object.entries(levels).map(([id, y]) => [id, near(y)]));
+  };
   const girthAt = (id) => torsoGirth(shape.pos, bands[id], levels[id]).girth * s;
+
+  fitLegs();
+  frame();
+  // whole-body weight first: chest, waist and hips together, on average, as the user's
+  const body = ["chest", "waist", "hips"].filter((id) => m[id]);
+  if (body.length) {
+    const share = { chest: 1, waist: 2, hips: 1 }; // weight shows most around the belly
+    const total = body.reduce((sum, id) => sum + share[id], 0);
+    const fullness = () => (body.reduce((sum, id) => sum + (share[id] * girthAt(id)) / m[id], 0) / total) * 100;
+    setWeight(solve((w) => { setWeight(w); return fullness(); }, 100, 0, 1.5));
+    fitLegs();
+    frame();
+  }
 
   // shoulders: follow the user's difference from the estimate, as a share of this body's width
   const shoulderWidth = () => {
@@ -229,14 +252,14 @@ export function fitBody(model, m) {
   };
   if (m.shoulders && m.shouldersEstimate) {
     const goal = shoulderWidth().width * (m.shoulders / m.shouldersEstimate);
-    shape.measure("shoulder-dist", solve((v) => { shape.measure("shoulder-dist", v); return shoulderWidth().width; }, goal, -1.5, 1.5));
+    shape.measure("shoulder-dist", solve((v) => { shape.measure("shoulder-dist", v); return shoulderWidth().width; }, goal, -1, 1));
   }
 
-  // two passes: the targets overlap a little (bust and waist, waist and hips)
+  // then each girth is fine-tuned, staying close to the range the shapes were made for (no bulges)
   for (let pass = 0; pass < 2; pass += 1) {
     for (const [id, target, level] of GIRTHS) {
       if (!m[id]) continue;
-      shape.measure(target, solve((v) => { shape.measure(target, v); return girthAt(level); }, m[id], -1.5, 2.5));
+      shape.measure(target, solve((v) => { shape.measure(target, v); return girthAt(level); }, m[id], -1.2, 1.5));
     }
   }
 
@@ -305,5 +328,6 @@ export function fitBody(model, m) {
     inseam: [c, innerAnkle ? [innerAnkle[0], 0.5, innerAnkle[2]] : [c[0] + 3, 0.5, c[2]]],
     foot: [[outer - 0.4, 0.6, heel], [outer - 0.4, 0.6, toe]],
     height: max - min > 0 ? m.height : 0,
+    weights: { ...shape.weights },
   };
 }
