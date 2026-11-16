@@ -4,9 +4,10 @@ import { alphaBounds } from "./image.js";
 
 const W = 600;
 const H = 1000;
-const BG = "#f4f0e8";
-const BODY = "#e2ddd3";
-const LINE = "#c3bcb0";
+// Colours of the v2 tile (#EAE2D6) and mannequin body (#D3C8BA), so the board blends into the card.
+const BG = "#EAE2D6";
+const BODY = "#D3C8BA";
+const LINE = "#BFB2A0";
 const trimmedCache = new Map();
 
 function loadImage(src) {
@@ -55,7 +56,7 @@ function head(ctx) {
 }
 
 function shoesPlaceholder(ctx) {
-  ctx.fillStyle = "#faf9f6"; ctx.strokeStyle = LINE; ctx.lineWidth = 2;
+  ctx.fillStyle = "#FFFDF9"; ctx.strokeStyle = LINE; ctx.lineWidth = 2;
   for (const x of [215, 315]) { ctx.beginPath(); ctx.roundRect(x, 905, 78, 35, 14); ctx.fill(); ctx.stroke(); }
 }
 

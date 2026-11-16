@@ -9,7 +9,7 @@ id = "PASTE_KV_NAMESPACE_ID_HERE"
 
 [vars]
 # Where the app is opened from: your GitHub Pages site + the Android app (+ local dev).
-ALLOWED_ORIGINS = "https://YOUR_GITHUB_USERNAME.github.io,https://localhost,http://localhost:5173"
+ALLOWED_ORIGINS = "https://hudie-061.github.io,https://localhost,http://localhost:5173"
 # Models are fixed here; the app cannot choose them.
 TEXT_MODEL = "gemini-3.1-flash-lite"
 IMAGE_MODEL = "gemini-3.1-flash-image"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ArrowCounterClockwise, Check, Plus, SpinnerGap, Trash, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
 import "./import-flow.css";
 import { localFetch } from "./lib/local-api.js";
@@ -135,7 +135,8 @@ function CleanupEditor({ job, tolerance, setTolerance, busy, onPreview, onAccept
   );
 }
 
-export function WardrobeImportFlow({ onGarmentApproved, onModeledApproved }) {
+// The «＋» button in the bottom menu calls ref.pick(). The tray above the menu shows progress.
+export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGarmentApproved, onModeledApproved, onOpenAccess }, ref) {
   const inputRef = useRef(null);
   const [jobs, setJobs] = useState([]);
   const [drafts, setDrafts] = useState({});
@@ -152,7 +153,9 @@ export function WardrobeImportFlow({ onGarmentApproved, onModeledApproved }) {
   jobsRef.current = jobs;
 
   useEffect(() => {
-    api(CONFIG_API).then(setSetup).catch((requestError) => setSetup({ ready: false, error: requestError.message }));
+    const loadSetup = () => api(CONFIG_API).then(setSetup).catch((requestError) => setSetup({ ready: false, error: requestError.message }));
+    loadSetup();
+    window.addEventListener("capsule:settings", loadSetup);
     api(API)
       .then((storedJobs) => {
         const visibleJobs = storedJobs.filter((job) => job.status !== "complete" && job.stages?.crop?.status !== "rejected" && job.stages?.garment?.status !== "rejected" && job.stages?.modeled?.status !== "rejected");
@@ -160,6 +163,7 @@ export function WardrobeImportFlow({ onGarmentApproved, onModeledApproved }) {
         setDrafts(Object.fromEntries(visibleJobs.map((job) => [job.id, defaultDraft(job)])));
       })
       .catch(() => {});
+    return () => window.removeEventListener("capsule:settings", loadSetup);
   }, []);
 
   const refresh = useCallback(async (id) => {
@@ -208,6 +212,13 @@ export function WardrobeImportFlow({ onGarmentApproved, onModeledApproved }) {
     window.addEventListener("dragenter", onDragEnter); window.addEventListener("dragover", onDragOver); window.addEventListener("dragleave", onDragLeave); window.addEventListener("drop", onDrop); window.addEventListener("paste", onPaste);
     return () => { window.removeEventListener("dragenter", onDragEnter); window.removeEventListener("dragover", onDragOver); window.removeEventListener("dragleave", onDragLeave); window.removeEventListener("drop", onDrop); window.removeEventListener("paste", onPaste); };
   }, [submitFiles]);
+
+  useImperativeHandle(ref, () => ({
+    pick: () => {
+      if (!setup?.ready) { setOpen(true); return; }
+      inputRef.current?.click();
+    },
+  }), [setup]);
 
   const perform = async (job, stage, action, prompt = "") => {
     setBusyId(job.id); setError("");
@@ -277,20 +288,20 @@ export function WardrobeImportFlow({ onGarmentApproved, onModeledApproved }) {
   const reviewJob = selectedReviewJob || jobs.find((job) => reviewStageFor(job)) || jobs.find((job) => hasCleanupFailure(job)) || active;
   const reviewStage = reviewJob ? reviewStageFor(reviewJob) : null;
   const progress = 0;
-  const hasImportActivity = Boolean(jobs.length || notice || setupRequired);
+  const hasImportActivity = Boolean(jobs.length || notice);
 
   return (
     <>
       <input ref={inputRef} type="file" accept="image/*" multiple hidden disabled={!setup?.ready} onChange={(event) => { submitFiles(event.target.files); event.target.value = ""; }} />
       <div className="import-drop-overlay" data-active={dragging && !setupRequired} aria-hidden={!dragging || setupRequired}><div className="import-drop-target is-over"><UploadSimple size={34} weight="light" /><h2>Отпусти фото здесь</h2><p>Подойдёт фото одной вещи или целого образа.</p></div></div>
-      <aside className={`import-tray${hasImportActivity ? " is-expanded" : ""}`} aria-label="Импорт вещей">
+      <aside className={`import-tray${hasImportActivity ? " is-expanded" : ""}`} aria-label="Импорт вещей" hidden={!hasImportActivity}>
         <button className="import-tray__button" type="button" onClick={() => setupRequired || hasImportActivity ? setOpen(true) : inputRef.current?.click()} aria-label={setupRequired ? "Открыть инструкцию" : hasImportActivity ? "Открыть импорт" : "Добавить вещи"}>{activeStatus?.tone === "processing" ? <SpinnerGap size={19} className="import-spinner" /> : activeStatus?.tone === "error" ? <WarningCircle size={19} /> : readyCount ? <span>{readyCount}</span> : notice ? <X size={18} /> : <Plus size={19} />}</button>
         <div className="import-tray__actions">{active && <img className="import-tray__preview" src={active.stages?.garment?.assetUrl || active.stages?.garment?.failedAssetUrl || active.stages?.crop?.assetUrl || active.originalAssetUrl} alt="" />}<span className="import-tray__label">{activeStatus?.text || "Добавить вещи"}</span>{!setupRequired && <button className="import-icon-button" type="button" onClick={() => inputRef.current?.click()} aria-label="Выбрать фото"><UploadSimple size={17} /></button>}</div>
       </aside>
       <div className="import-popover-backdrop" data-open={open} onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>
         <section className="import-popover" role="dialog" aria-modal="true" aria-labelledby="import-title">
-          <header className="import-popover__header"><div><p className="import-popover__eyebrow">Импорт в гардероб</p><h2 className="import-popover__title" id="import-title">{readyCount ? `Готово к проверке: ${readyCount}` : activeStatus?.tone === "error" ? "Импорт требует внимания" : jobs.length ? "Готовлю новые вещи" : notice?.text || "Добавить в гардероб"}</h2></div><button className="import-icon-button" type="button" onClick={() => setOpen(false)} aria-label="Закрыть импорт"><X size={20} /></button></header>
-          {!jobs.length ? setupRequired ? <div className="import-drop-target import-setup-warning"><WarningCircle size={30} /><h2>Нужна настройка</h2><p>Открой «Настройки» вверху и впиши адрес сервера и код доступа. Их даёт владелец приложения.</p></div> : <div className="import-drop-target"><UploadSimple size={28} /><h2>{notice ? "Попробуй другое фото" : "Выбери или вставь фото"}</h2><p>{notice?.detail || "Найду каждую вещь, предложу название и цвет, и ничего не сохраню без твоего подтверждения. Лучше снимать вещь целиком на однотонном фоне."}</p><button className="import-button import-button--primary" disabled={!setup?.ready} onClick={() => { setNotice(null); inputRef.current?.click(); }}>Выбрать фото</button></div> : (
+          <header className="import-popover__header"><div><p className="import-popover__eyebrow">Импорт в гардероб</p><h2 className="import-popover__title" id="import-title">{setupRequired && !jobs.length ? "Добавить в гардероб" : readyCount ? `Готово к проверке: ${readyCount}` : activeStatus?.tone === "error" ? "Импорт требует внимания" : jobs.length ? "Готовлю новые вещи" : notice?.text || "Добавить в гардероб"}</h2></div><button className="import-icon-button" type="button" onClick={() => setOpen(false)} aria-label="Закрыть импорт"><X size={20} /></button></header>
+          {!jobs.length ? setupRequired ? <div className="import-drop-target import-setup-warning"><WarningCircle size={30} /><h2>Нужен код доступа</h2><p>Чтобы ИИ находил и вырезал вещи, впиши код доступа в «Профиле». Его даёт владелец приложения.</p><button className="import-button import-button--primary" onClick={() => { setOpen(false); onOpenAccess?.(); }}>Ввести код</button></div> : <div className="import-drop-target"><UploadSimple size={28} /><h2>{notice ? "Попробуй другое фото" : "Выбери или вставь фото"}</h2><p>{notice?.detail || "Найду каждую вещь, предложу название и цвет, и ничего не сохраню без твоего подтверждения. Лучше снимать вещь целиком на однотонном фоне."}</p><button className="import-button import-button--primary" disabled={!setup?.ready} onClick={() => { setNotice(null); inputRef.current?.click(); }}>Выбрать фото</button></div> : (
             <>
               <div className={`import-progress${activeStatus?.tone !== "processing" ? " is-reviewing" : progress < 100 ? " is-indeterminate" : ""}`}><div className="import-progress__meta"><span>{activeStatus?.text}</span><span>{jobs.length} {plural(jobs.length, ["вещь", "вещи", "вещей"])}</span></div>{activeStatus?.tone === "processing" && <div className="import-progress__track"><div className="import-progress__bar" style={{ "--import-progress": `${progress}%` }} /></div>}</div>
               {reviewJob && reviewStage ? <ReviewEditor job={reviewJob} stage={reviewStage} draft={drafts[reviewJob.id] || defaultDraft(reviewJob)} setDraft={(draft) => setDrafts((current) => ({ ...current, [reviewJob.id]: draft }))} regenPrompt={regenerationPrompts[`${reviewJob.id}:${reviewStage}`] || ""} setRegenPrompt={(prompt) => setRegenerationPrompts((current) => ({ ...current, [`${reviewJob.id}:${reviewStage}`]: prompt }))} busy={busyId === reviewJob.id} onAction={(action, prompt) => perform(reviewJob, reviewStage, action, prompt)} /> : reviewJob && hasCleanupFailure(reviewJob) ? <CleanupEditor job={reviewJob} tolerance={cleanupTolerances[reviewJob.id] ?? reviewJob.stages.garment.cleanupTolerance ?? 46} setTolerance={(tolerance) => setCleanupTolerances((current) => ({ ...current, [reviewJob.id]: tolerance }))} busy={busyId === reviewJob.id} onPreview={(tolerance) => performCleanup(reviewJob, "preview", tolerance)} onAccept={() => performCleanup(reviewJob, "accept")} /> : null}
@@ -303,4 +314,4 @@ export function WardrobeImportFlow({ onGarmentApproved, onModeledApproved }) {
       </div>
     </>
   );
-}
+});

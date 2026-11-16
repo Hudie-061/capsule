@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>v2 · Покупки — лучшая цена</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1E1B18}a:hover{color:#6B6259}
+button{cursor:pointer}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.rise{animation:rise .35s ease-out both}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F4EFE7; color: #1E1B18; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+<div style="flex: 1; display: flex; flex-direction: column; padding: 52px 20px 0; min-height: 0">
+<h1 style="margin: 0; font-family: 'Instrument Serif', Georgia, serif; font-weight: 400; font-size: 36px; line-height: 1">Покупки</h1>
+<div style="margin-top: 14px; background: #1E1B18; color: #F4EFE7; border-radius: 24px; padding: 16px 18px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 14px 30px rgba(30, 27, 24, 0.22)">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 13px; color: #CFC6BA">Сэкономлено в ноябре</span>
+<span style="font-family: 'Instrument Serif', Georgia, serif; font-size: 42px; line-height: 1">€47</span>
+<span style="font-size: 12px; color: #CFC6BA">на 3 покупках · сравнили цены с доставкой</span>
+</div>
+<span aria-hidden="true" style="width: 52px; height: 52px; border-radius: 16px; background: #3A342E; display: flex; align-items: center; justify-content: center"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F4EFE7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"></path><path d="M15 7h6v6"></path></svg></span>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 20px">
+<span style="font-size: 16px; font-weight: 700">Чего не хватает капсуле</span>
+<span style="font-size: 12px; color: #6B6259">по твоему гардеробу</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px">
+<sc-for list="{{gaps}}" as="g" hint-placeholder-count="3">
+<button onClick="{{g.pick}}" aria-pressed="{{g.pressed}}" style="border-radius: 20px; border: {{g.border}}; background: #FFFDF9; padding: 8px; display: flex; flex-direction: column; gap: 6px; font: inherit; color: #1E1B18; text-align: left; box-shadow: {{g.shadow}}; transition: box-shadow 0.25s">
+<span style="height: 58px; border-radius: 14px; background: #EAE2D6; display: flex; align-items: center; justify-content: center">
+<svg aria-hidden="true" width="48" height="48" viewBox="0 0 120 120">
+<sc-if value="{{g.isJacket}}" hint-placeholder-val="{{true}}"><path d="M42 16 L60 24 L78 16 L102 30 L108 104 L86 104 L84 58 L80 104 L40 104 L36 58 L34 104 L12 104 L18 30 Z" fill="{{g.fill}}"></path></sc-if>
+<sc-if value="{{g.isPants}}" hint-placeholder-val="{{false}}"><path d="M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z" fill="{{g.fill}}"></path></sc-if>
+<sc-if value="{{g.isShoes}}" hint-placeholder-val="{{false}}"><path d="M12 76 L16 52 Q30 58 42 48 L58 58 Q82 66 102 70 Q110 72 110 82 L110 88 L12 88 Z" fill="{{g.fill}}"></path></sc-if>
+</svg>
+</span>
+<span style="padding: 0 2px; font-size: 13px; font-weight: 600; line-height: 1.2">{{g.name}}</span>
+<span style="padding: 0 2px; font-size: 12px; color: #574D44">{{g.impact}}</span>
+</button>
+</sc-for>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px">
+<div role="group" aria-label="Состояние" style="display: flex; gap: 6px">
+<sc-for list="{{filters}}" as="f" hint-placeholder-count="3">
+<button onClick="{{f.pick}}" aria-pressed="{{f.pressed}}" style="min-height: 36px; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 600; border: 1px solid #D8CCBB; background: {{f.bg}}; color: {{f.fg}}; transition: background 0.2s, color 0.2s">{{f.label}}</button>
+</sc-for>
+</div>
+<span style="font-size: 12px; color: #6B6259">цена с доставкой</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px">
+<sc-for list="{{offers}}" as="o" hint-placeholder-count="4">
+<a href="#" class="rise" style="text-decoration: none; color: #1E1B18; min-height: 64px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 8px 12px 8px 8px; border-radius: 20px; background: #FFFDF9; border: {{o.border}}; box-shadow: {{o.shadow}}; animation-delay: {{o.delay}}">
+<span aria-hidden="true" style="width: 48px; height: 48px; flex-shrink: 0; border-radius: 14px; background: #EAE2D6; display: flex; align-items: center; justify-content: center">
+<svg width="36" height="36" viewBox="0 0 120 120">
+<sc-if value="{{o.isJacket}}" hint-placeholder-val="{{true}}"><path d="M42 16 L60 24 L78 16 L102 30 L108 104 L86 104 L84 58 L80 104 L40 104 L36 58 L34 104 L12 104 L18 30 Z" fill="{{o.fill}}"></path></sc-if>
+<sc-if value="{{o.isPants}}" hint-placeholder-val="{{false}}"><path d="M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z" fill="{{o.fill}}"></path></sc-if>
+<sc-if value="{{o.isShoes}}" hint-placeholder-val="{{false}}"><path d="M12 76 L16 52 Q30 58 42 48 L58 58 Q82 66 102 70 Q110 72 110 82 L110 88 L12 88 Z" fill="{{o.fill}}"></path></sc-if>
+</svg>
+</span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0">
+<span style="display: flex; align-items: center; gap: 6px">
+<span style="font-size: 14px; font-weight: 600">{{o.store}}</span>
+<span style="background: #F1EAE0; border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; color: #574D44">{{o.cond}}</span>
+</span>
+<span style="font-size: 12px; color: #6B6259">{{o.ship}}</span>
+</span>
+<span style="display: flex; flex-direction: column; align-items: flex-end; gap: 3px">
+<span style="font-size: 16px; font-weight: 700">{{o.total}}</span>
+<sc-if value="{{o.isBest}}" hint-placeholder-val="{{false}}"><span style="background: #1E1B18; color: #F4EFE7; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; white-space: nowrap">Лучшая · −{{o.saving}}</span></sc-if>
+</span>
+</a>
+</sc-for>
+</div>
+</div>
+<nav aria-label="Навигация" style="height: 84px; box-sizing: border-box; padding: 8px 8px 22px; display: flex; justify-content: space-around; align-items: center; border-top: 1px solid #E2D9CC; background: #F4EFE7">
+<a href="V2-Today.dc.html" style="text-decoration: none; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 11px; font-weight: 500; color: #6B6259"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>Сегодня</a>
+<button style="background: none; border: 0; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 11px; font-weight: 500; color: #6B6259"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6a2 2 0 1 1 3 1.7c-.6.4-1 .9-1 1.6V10"></path><path d="M12 10 L3 16.5 Q2 18 4 18 L20 18 Q22 18 21 16.5 Z"></path></svg>Гардероб</button>
+<button aria-label="Добавить вещи" style="width: 52px; height: 52px; border-radius: 26px; border: 0; background: #1E1B18; color: #F4EFE7; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+<button style="background: none; border: 0; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 11px; font-weight: 600; color: #1E1B18"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6Z"></path><path d="M9 8V6a3 3 0 0 1 6 0v2"></path></svg>Покупки</button>
+<button style="background: none; border: 0; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 11px; font-weight: 500; color: #6B6259"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"></path></svg>Профиль</button>
+</nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { gap: 'jacket', filter: 'all' };
+}
+renderVals() {
+var self = this;
+var s = this.state;
+var data = {
+jacket: { name: 'Тёплая куртка', impact: '+14 образов', fill: '#5B4A3B', offers: [
+{ store: 'Магазин А', cond: 'new', price: 89, ship: 0 },
+{ store: 'Ресейл Б', cond: 'used', price: 34, ship: 4.9 },
+{ store: 'Магазин В', cond: 'new', price: 65, ship: 3.9 },
+{ store: 'Ресейл Г', cond: 'used', price: 42, ship: 0 } ] },
+shoes: { name: 'Ботинки', impact: '+9 образов', fill: '#6E4F35', offers: [
+{ store: 'Магазин А', cond: 'new', price: 119, ship: 0 },
+{ store: 'Ресейл Б', cond: 'used', price: 48, ship: 4.9 },
+{ store: 'Магазин В', cond: 'new', price: 79, ship: 0 },
+{ store: 'Ресейл Г', cond: 'used', price: 55, ship: 3.5 } ] },
+pants: { name: 'Тёмные джинсы', impact: '+6 образов', fill: '#3C4A63', offers: [
+{ store: 'Магазин А', cond: 'new', price: 49, ship: 0 },
+{ store: 'Ресейл Б', cond: 'used', price: 18, ship: 3.9 },
+{ store: 'Магазин В', cond: 'new', price: 35, ship: 0 },
+{ store: 'Ресейл Г', cond: 'used', price: 22, ship: 0 } ] }
+};
+function eur(n) { return '€' + n.toFixed(2).replace('.', ','); }
+var g = data[s.gap];
+var all = g.offers.map(function (o) { return Object.assign({ total: o.price + o.ship }, o); });
+var list = all.filter(function (o) { return s.filter === 'all' || o.cond === s.filter; });
+list.sort(function (a, b) { return a.total - b.total; });
+var maxT = list.length ? list[list.length - 1].total : 0;
+var gapKeys = ['jacket', 'shoes', 'pants'];
+var filterDefs = [{ id: 'all', label: 'Все' }, { id: 'new', label: 'Новые' }, { id: 'used', label: 'Б/у' }];
+return {
+gaps: gapKeys.map(function (k) {
+var on = s.gap === k;
+var d = data[k];
+return {
+name: d.name, impact: d.impact, fill: d.fill,
+isJacket: k === 'jacket', isPants: k === 'pants', isShoes: k === 'shoes',
+pressed: on ? 'true' : 'false',
+border: on ? '2px solid #1E1B18' : '1px solid #E5DACB',
+shadow: on ? '0 10px 22px rgba(30, 27, 24, 0.12)' : 'none',
+pick: function () { self.setState({ gap: k }); }
+};
+}),
+filters: filterDefs.map(function (f) {
+var on = s.filter === f.id;
+return {
+label: f.label,
+pressed: on ? 'true' : 'false',
+bg: on ? '#1E1B18' : '#FFFDF9',
+fg: on ? '#F4EFE7' : '#1E1B18',
+pick: function () { self.setState({ filter: f.id }); }
+};
+}),
+offers: list.map(function (o, i) {
+var best = i === 0;
+return {
+store: o.store,
+cond: o.cond === 'new' ? 'Новое' : 'Б/у',
+ship: o.ship === 0 ? 'Бесплатная доставка' : '+' + eur(o.ship) + ' доставка',
+total: eur(o.total),
+isBest: best,
+saving: '€' + Math.round(maxT - o.total),
+fill: g.fill,
+isJacket: s.gap === 'jacket', isPants: s.gap === 'pants', isShoes: s.gap === 'shoes',
+border: best ? '2px solid #1E1B18' : '1px solid #E5DACB',
+shadow: best ? '0 10px 22px rgba(30, 27, 24, 0.12)' : 'none',
+delay: (i * 0.06) + 's'
+};
+})
+};
+}
+}
+</script>
+</body>
+</html>

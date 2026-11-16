@@ -4,15 +4,14 @@ import { WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
 import { localFetch } from "./lib/local-api.js";
 import { plural } from "./lib/plural.js";
-import { OutfitsView } from "./outfits.jsx";
+import { getSettings } from "./lib/settings.js";
+import { PaletteView } from "./palette.jsx";
 import { SettingsView } from "./settings-panel.jsx";
-import "./capsule.css";
-
-const VIEWS = [
-  { id: "wardrobe", label: "Гардероб" },
-  { id: "outfits", label: "Образы" },
-  { id: "settings", label: "Настройки" },
-];
+import { ShoppingView } from "./shopping.jsx";
+import { TimingView } from "./timing.jsx";
+import { TodayView } from "./today.jsx";
+import { Icon } from "./ui.jsx";
+import "./v2.css";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
 const DELETED_STORAGE_KEY = "open-wardrobe-deleted-v1";
@@ -164,24 +163,28 @@ function sampleImageColor(image, canvas, event) {
   return null;
 }
 
-function GalleryItem({ item, selected, onOpen }) {
-  const type = TYPE_MAP[item.part]?.singular || "wardrobe item";
+function GalleryItem({ item, index = 0, selected, onOpen }) {
+  const type = TYPE_MAP[item.part]?.singular || "Вещь";
 
   return (
     <button
-      className={`gallery-item${selected ? " selected" : ""}`}
+      className={`gallery-item rise${selected ? " selected" : ""}`}
+      style={{ animationDelay: `${Math.min(index, 12) * 0.04}s` }}
       type="button"
       onClick={() => onOpen(item.id)}
       aria-label={`Открыть ${item.name || type}`}
       aria-pressed={selected}
       data-testid={`wardrobe-item-${item.id}`}
     >
-      <OptimizedImage
-        src={item.thumbnail || item.image}
-        alt=""
-        sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 180px"
-        breakpoints={[120, 180, 240, 320, 480]}
-      />
+      <span className="gallery-item__image">
+        <OptimizedImage
+          src={item.thumbnail || item.image}
+          alt=""
+          sizes="(max-width: 520px) calc(50vw - 16px), (max-width: 860px) calc(33vw - 18px), 180px"
+          breakpoints={[120, 180, 240, 320, 480]}
+        />
+      </span>
+      <span className="gallery-item__name">{item.name || type}</span>
     </button>
   );
 }
@@ -543,13 +546,45 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
   );
 }
 
+const TABS = [
+  { id: "today", label: "Сегодня", icon: "today" },
+  { id: "wardrobe", label: "Гардероб", icon: "hanger" },
+  { id: "add" },
+  { id: "shopping", label: "Покупки", icon: "bag" },
+  { id: "profile", label: "Профиль", icon: "profile" },
+];
+
+function BottomNav({ tab, onTab, onAdd }) {
+  return (
+    <nav className="bottom-nav" aria-label="Навигация">
+      <div className="bottom-nav__inner">
+        {TABS.map((t) => t.id === "add" ? (
+          <button key="add" type="button" className="bottom-nav__add" aria-label="Добавить вещи" onClick={onAdd}><Icon name="plus" size={24} width={2} /></button>
+        ) : (
+          <button key={t.id} type="button" className={`bottom-nav__item${tab === t.id ? " is-on" : ""}`} aria-current={tab === t.id ? "page" : undefined} onClick={() => onTab(t.id)}>
+            <Icon name={t.icon} size={24} />
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
 export function App() {
   const [items, setItems] = useState([]);
   const [activeType, setActiveType] = useState("all");
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [view, setView] = useState("wardrobe");
+  const [tab, setTab] = useState("today");
+  const [sub, setSub] = useState(null); // "palette" | "timing" inside «Профиль»
+  const [shopping, setShopping] = useState({ focus: null, refreshKey: 0 });
+  const [profileFocus, setProfileFocus] = useState(null);
+  const [setupReady, setSetupReady] = useState(true);
+  const [toast, setToast] = useState("");
+  const importRef = useRef(null);
+  const toastTimer = useRef(null);
 
   useEffect(() => {
     localFetch("/api/import/wardrobe")
@@ -567,6 +602,30 @@ export function App() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    const refresh = () => getSettings().then((s) => setSetupReady(Boolean(s.proxyUrl && s.accessCode)));
+    refresh();
+    window.addEventListener("capsule:settings", refresh);
+    return () => window.removeEventListener("capsule:settings", refresh);
+  }, []);
+
+  const showToast = useCallback((text) => {
+    setToast(text);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 3200);
+  }, []);
+
+  const go = useCallback((next, options = {}) => {
+    setTab(next);
+    setSub(options.sub || null);
+    setSelectedId(null);
+    if (next === "shopping") setShopping((current) => ({ focus: options.focus || null, refreshKey: options.refresh ? current.refreshKey + 1 : current.refreshKey }));
+    setProfileFocus(options.profileFocus || null);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const openAccess = useCallback(() => go("profile", { profileFocus: "access" }), [go]);
+
   const selectedItem = items.find((item) => item.id === selectedId) || null;
 
   const visibleItems = useMemo(() => {
@@ -580,6 +639,8 @@ export function App() {
     });
   }, [activeType, items]);
 
+  const counts = useMemo(() => Object.fromEntries(TYPES.map((type) => [type.id, type.id === "all" ? items.length : items.filter((item) => item.part === type.id).length])), [items]);
+
   const chooseType = (typeId) => {
     setActiveType(typeId);
     setSelectedId(null);
@@ -592,6 +653,7 @@ export function App() {
       const { name, part, color, secondaryColor, tags, palette } = updatedItem;
       localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, part, color, secondaryColor, tags, palette }) }).catch(() => {});
     }
+    showToast("Сохранено");
   };
 
   const deleteItem = async (id) => {
@@ -619,58 +681,56 @@ export function App() {
     setItems((current) => current.map((item) => item.id === id ? { ...item, modeledImage } : item));
   }, []);
 
+  const addItems = () => importRef.current?.pick();
+
   return (
     <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
-      <header className="app-topbar">
-        <span className="app-brand">Capsule</span>
-        <nav className="app-tabs" aria-label="Разделы">
-          {VIEWS.map((v) => (
-            <button key={v.id} type="button" className={view === v.id ? "active" : ""} aria-pressed={view === v.id} onClick={() => { setView(v.id); setSelectedId(null); }}>{v.label}</button>
-          ))}
-        </nav>
-      </header>
-      {view === "outfits" && <main className="capsule-pane"><OutfitsView items={items} onOpenSettings={() => setView("settings")} /></main>}
-      {view === "settings" && <main className="capsule-pane"><SettingsView /></main>}
-      <main className="gallery-pane" hidden={view !== "wardrobe"}>
-        <header className="gallery-header">
-          <div className="gallery-meta-row">
-            <p className="piece-count">{items.length} {plural(items.length, ["вещь", "вещи", "вещей"])}</p>
-          </div>
-          <nav className="category-nav" aria-label="Фильтр по типу вещей">
-            {TYPES.map((type) => (
-              <button
-                key={type.id}
-                type="button"
-                className={activeType === type.id ? "active" : ""}
-                onClick={() => chooseType(type.id)}
-                aria-pressed={activeType === type.id}
-              >
-                {type.label}
-              </button>
-            ))}
-          </nav>
-        </header>
+      <main className="app-main" key={`${tab}:${sub || ""}`}>
+        {tab === "today" && <TodayView items={items} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast} />}
+        {tab === "shopping" && <ShoppingView items={items} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} />}
+        {tab === "profile" && !sub && <SettingsView focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} />}
+        {tab === "profile" && sub === "palette" && <PaletteView setupReady={setupReady} onOpenAccess={openAccess} onBack={() => setSub(null)} onFindClothes={() => go("shopping", { refresh: true })} />}
+        {tab === "profile" && sub === "timing" && <TimingView onBack={() => setSub(null)} onToast={showToast} />}
+        {tab === "wardrobe" && (
+          <section className="screen screen--wide wardrobe">
+            <div className="wardrobe-head rise">
+              <h1 className="screen-title">Гардероб</h1>
+              <span className="muted-text">{items.length} {plural(items.length, ["вещь", "вещи", "вещей"])}</span>
+            </div>
+            <nav className="category-pills" aria-label="Фильтр по типу вещей">
+              {TYPES.map((type) => (
+                <button key={type.id} type="button" className={`filter-pill${activeType === type.id ? " is-on" : ""}`} onClick={() => chooseType(type.id)} aria-pressed={activeType === type.id}>
+                  {type.label}{counts[type.id] ? <span className="filter-pill__count">{counts[type.id]}</span> : null}
+                </button>
+              ))}
+            </nav>
 
-        {error && <p className="status error">{error}</p>}
-        {!error && loading && <p className="status">Загружаю гардероб</p>}
-        {!error && !loading && !items.length && <p className="status empty">Добавь фото первой вещи кнопкой внизу, перетащи или вставь его.</p>}
+            {error && <p className="error-text">{error}</p>}
+            {!error && loading && <div className="gallery-grid">{[0, 1, 2, 3, 4, 5].map((i) => <span key={i} className="gallery-item gallery-item--skeleton shimmer" />)}</div>}
+            {!error && !loading && !items.length && (
+              <div className="look-card look-card--empty rise">
+                <span className="empty-icon"><Icon name="camera" size={26} /></span>
+                <div className="card-title">Сфотографируй первые вещи</div>
+                <p className="muted-text">Можно по одной или несколько на одном фото — ИИ найдёт каждую, вырежет с фона и подпишет. Лучше снимать на однотонном фоне.</p>
+                <button type="button" className="btn btn--dark" onClick={addItems}><Icon name="plus" size={18} width={2} /> Добавить вещи</button>
+              </div>
+            )}
 
-        {!!items.length && (
-          <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "Все"}: вещи`}>
-            {visibleItems.map((item) => (
-              <GalleryItem
-                key={item.id}
-                item={item}
-                selected={selectedId === item.id}
-                onOpen={setSelectedId}
-              />
-            ))}
+            {!!items.length && (
+              <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "Все"}: вещи`}>
+                {visibleItems.map((item, index) => (
+                  <GalleryItem key={item.id} item={item} index={index} selected={selectedId === item.id} onOpen={setSelectedId} />
+                ))}
+              </section>
+            )}
           </section>
         )}
       </main>
 
+      <BottomNav tab={tab} onTab={(next) => go(next)} onAdd={addItems} />
       {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
-      {view === "wardrobe" && <WardrobeImportFlow onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} />}
+      <WardrobeImportFlow ref={importRef} onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} onOpenAccess={openAccess} />
+      {toast && <p className="toast" role="status">{toast}</p>}
     </div>
   );
 }

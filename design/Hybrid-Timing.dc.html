@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Гибрид · Когда присылать образ</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1E1B18}a:hover{color:#6B6259}
+button{cursor:pointer}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.rise{animation:rise .3s ease-out both}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F4EFE7; color: #1E1B18; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; padding: 52px 20px 28px; overflow: hidden">
+<button aria-label="Назад" style="width: 44px; height: 44px; border-radius: 22px; border: 1px solid #E5DACB; background: #FFFDF9; color: #1E1B18; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(30, 27, 24, 0.08)"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"></path></svg></button>
+<h1 style="margin: 14px 0 0; font-family: 'Instrument Serif', Georgia, serif; font-weight: 400; font-size: 34px; line-height: 1.05">Когда присылать образ?</h1>
+<p style="margin: 8px 0 16px; font-size: 14px; line-height: 1.4; color: #6B6259">Многие собираются с вечера — выбери, как удобно тебе. Это можно поменять в любой момент.</p>
+<div role="radiogroup" aria-label="Время подбора образа" style="display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{options}}" as="o" hint-placeholder-count="3">
+<button role="radio" aria-checked="{{o.checked}}" onClick="{{o.pick}}" style="min-height: 72px; box-sizing: border-box; display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 22px; background: #FFFDF9; border: {{o.border}}; box-shadow: {{o.shadow}}; text-align: left; font: inherit; color: #1E1B18; transition: box-shadow 0.25s, border-color 0.25s">
+<span style="width: 44px; height: 44px; flex-shrink: 0; border-radius: 14px; background: {{o.iconBg}}; color: {{o.iconFg}}; display: flex; align-items: center; justify-content: center; transition: background 0.25s, color 0.25s">
+<sc-if value="{{o.isSun}}" hint-placeholder-val="{{true}}"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"></path></svg></sc-if>
+<sc-if value="{{o.isMoon}}" hint-placeholder-val="{{false}}"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a7 7 0 1 0 10.5 10.5Z"></path></svg></sc-if>
+<sc-if value="{{o.isBoth}}" hint-placeholder-val="{{false}}"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5"></path><path d="M20 4v4.5h-4.5"></path><path d="M20 12a8 8 0 0 1-13.7 5.7L4 15.5"></path><path d="M4 20v-4.5h4.5"></path></svg></sc-if>
+</span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0">
+<span style="font-size: 16px; font-weight: 700">{{o.title}}</span>
+<span style="font-size: 13px; line-height: 1.35; color: #6B6259">{{o.desc}}</span>
+</span>
+<span aria-hidden="true" style="width: 22px; height: 22px; flex-shrink: 0; border-radius: 11px; border: 2px solid #1E1B18; box-sizing: border-box; display: flex; align-items: center; justify-content: center"><span style="width: 10px; height: 10px; border-radius: 5px; background: #1E1B18; opacity: {{o.dot}}; transition: opacity 0.2s"></span></span>
+</button>
+</sc-for>
+</div>
+<div style="margin-top: 20px; font-size: 13px; font-weight: 600; color: #6B6259">Время уведомления</div>
+<sc-if value="{{showMorning}}" hint-placeholder-val="{{true}}">
+<div class="rise" style="display: flex; align-items: center; gap: 8px; margin-top: 10px">
+<span style="width: 46px; font-size: 13px; color: #6B6259">Утро</span>
+<sc-for list="{{mTimes}}" as="t" hint-placeholder-count="4">
+<button onClick="{{t.pick}}" aria-pressed="{{t.pressed}}" style="flex: 1; min-height: 40px; border-radius: 12px; border: 1px solid #E5DACB; background: {{t.bg}}; color: {{t.fg}}; font: inherit; font-size: 14px; font-weight: 600; transition: background 0.2s, color 0.2s">{{t.label}}</button>
+</sc-for>
+</div>
+</sc-if>
+<sc-if value="{{showEvening}}" hint-placeholder-val="{{false}}">
+<div class="rise" style="display: flex; align-items: center; gap: 8px; margin-top: 10px">
+<span style="width: 46px; font-size: 13px; color: #6B6259">Вечер</span>
+<sc-for list="{{eTimes}}" as="t" hint-placeholder-count="4">
+<button onClick="{{t.pick}}" aria-pressed="{{t.pressed}}" style="flex: 1; min-height: 40px; border-radius: 12px; border: 1px solid #E5DACB; background: {{t.bg}}; color: {{t.fg}}; font: inherit; font-size: 14px; font-weight: 600; transition: background 0.2s, color 0.2s">{{t.label}}</button>
+</sc-for>
+</div>
+</sc-if>
+<div style="margin-top: 20px; font-size: 13px; font-weight: 600; color: #6B6259">Так будет выглядеть уведомление</div>
+<div class="rise" style="margin-top: 8px; background: #FFFDF9; border: 1px solid #E5DACB; border-radius: 22px; padding: 12px 14px; display: flex; gap: 12px; box-shadow: 0 10px 24px rgba(30, 27, 24, 0.1)">
+<span aria-hidden="true" style="width: 38px; height: 38px; flex-shrink: 0; border-radius: 10px; background: #1E1B18; color: #F4EFE7; display: flex; align-items: center; justify-content: center; font-family: 'Instrument Serif', Georgia, serif; font-size: 22px">К</span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="display: flex; justify-content: space-between; font-size: 12px; color: #6B6259"><span>Капсула</span><span>{{pushTime}}</span></span>
+<span style="font-size: 14px; font-weight: 700">{{pushTitle}}</span>
+<span style="font-size: 13px; color: #4F463E">{{pushBody}}</span>
+</span>
+</div>
+<div style="flex: 1"></div>
+<button style="min-height: 54px; border-radius: 27px; border: 0; background: #1E1B18; color: #F4EFE7; font: inherit; font-size: 16px; font-weight: 600">Сохранить</button>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { mode: 'evening', mTime: '07:30', eTime: '21:00' };
+}
+renderVals() {
+var self = this;
+var s = this.state;
+var defs = [
+{ id: 'morning', title: 'Утром', desc: 'Образ на сегодня — по погоде за окном' },
+{ id: 'evening', title: 'С вечера', desc: 'Образ на завтра — успеешь собрать и погладить' },
+{ id: 'both', title: 'Оба раза', desc: 'Вечером план, утром поправка, если погода изменилась' }
+];
+function times(list, key) {
+return list.map(function (t) {
+var on = s[key] === t;
+var patch = {};
+patch[key] = t;
+return {
+label: t,
+pressed: on ? 'true' : 'false',
+bg: on ? '#1E1B18' : '#FFFDF9',
+fg: on ? '#F4EFE7' : '#1E1B18',
+pick: function () { self.setState(patch); }
+};
+});
+}
+var ev = s.mode !== 'morning';
+return {
+options: defs.map(function (d) {
+var on = s.mode === d.id;
+return {
+title: d.title,
+desc: d.desc,
+isSun: d.id === 'morning',
+isMoon: d.id === 'evening',
+isBoth: d.id === 'both',
+checked: on ? 'true' : 'false',
+border: on ? '2px solid #1E1B18' : '1px solid #E5DACB',
+shadow: on ? '0 10px 24px rgba(30, 27, 24, 0.12)' : 'none',
+iconBg: on ? '#1E1B18' : '#F1EAE0',
+iconFg: on ? '#F4EFE7' : '#1E1B18',
+dot: on ? '1' : '0',
+pick: function () { self.setState({ mode: d.id }); }
+};
+}),
+showMorning: s.mode !== 'evening',
+showEvening: s.mode !== 'morning',
+mTimes: times(['06:30', '07:00', '07:30', '08:00'], 'mTime'),
+eTimes: times(['20:00', '21:00', '22:00', '23:00'], 'eTime'),
+pushTime: ev ? s.eTime : s.mTime,
+pushTitle: ev ? 'Образ на завтра готов' : 'Образ на сегодня готов',
+pushBody: ev ? 'Завтра 6° и дождь — тёмный овершот, футболка и широкие брюки' : 'Сейчас 9° — овершот, футболка и широкие брюки'
+};
+}
+}
+</script>
+</body>
+</html>

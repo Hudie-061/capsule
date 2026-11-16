@@ -6,25 +6,44 @@ import { base64ToBlob, blobToBase64 } from "./image.js";
 
 export class SetupError extends Error {}
 
-async function task(name, input) {
+// fetch() only says "Failed to fetch". A second, opaque request tells the two real causes apart:
+// the server is unreachable (wrong address, no internet) or it answered but the browser hid the
+// answer (the Worker crashed or this site is not in ALLOWED_ORIGINS).
+async function explainFetchFailure(proxyUrl) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "Нет интернета. Проверь подключение и попробуй ещё раз.";
+  try {
+    await fetch(`${proxyUrl}/status`, { mode: "no-cors", cache: "no-store" });
+  } catch {
+    return `Сервер ${proxyUrl} недоступен. Проверь адрес сервера в «Профиле» и интернет.`;
+  }
+  const origin = typeof location !== "undefined" ? location.origin : "";
+  return `Сервер отвечает, но браузер не показывает ответ. Владельцу: проверь, что в Worker привязан KV «USAGE» и что адрес ${origin} есть в ALLOWED_ORIGINS, потом сделай Deploy.`;
+}
+
+async function call(path, { method = "GET", body } = {}) {
   const settings = await getSettings();
-  if (!settings.proxyUrl) throw new SetupError("Не указан адрес сервера. Открой «Настройки».");
-  if (!settings.accessCode) throw new SetupError("Не указан код доступа. Открой «Настройки».");
+  if (!settings.proxyUrl) throw new SetupError("Не указан адрес сервера. Открой «Профиль» → «Доступ».");
+  if (!settings.accessCode) throw new SetupError("Не указан код доступа. Открой «Профиль» → «Доступ».");
   let response;
   try {
-    response = await fetch(`${settings.proxyUrl}/api/${name}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Access-Code": settings.accessCode },
-      body: JSON.stringify(input),
+    response = await fetch(`${settings.proxyUrl}${path}`, {
+      method,
+      headers: { ...(body ? { "Content-Type": "application/json" } : {}), "X-Access-Code": settings.accessCode },
+      body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
-    throw new Error("Нет связи с сервером. Проверь интернет и адрес сервера в настройках.");
+    throw new Error(await explainFetchFailure(settings.proxyUrl));
   }
   const result = await response.json().catch(() => ({}));
-  if (response.status === 401) throw new SetupError("Код доступа не подошёл. Проверь его в «Настройках».");
+  if (response.status === 401) throw new SetupError("Код доступа не подошёл. Проверь его в «Профиле» → «Доступ».");
   if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : `Ошибка сервера (${response.status})`);
   return result;
 }
+
+const task = (name, input) => call(`/api/${name}`, { method: "POST", body: input });
+
+// GET /status: who am I and how much of today's limit is left.
+export const checkConnection = () => call("/status");
 
 async function toPayload(blob) {
   return { mimeType: blob.type || "image/png", data: await blobToBase64(blob) };
@@ -67,4 +86,8 @@ export async function gapsTask({ items, profile, feedback, learned }) {
 
 export async function learnTask({ comment, outfitItems, liked, rules }) {
   return task("learn", { comment, outfitItems: outfitItems.map(plainItem), liked, rules });
+}
+
+export async function paletteTask(selfieBlob) {
+  return task("palette", { image: await toPayload(selfieBlob) });
 }

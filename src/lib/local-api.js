@@ -145,7 +145,7 @@ function generate(jobId, stageName) {
         result = await removeChromaBackground(raw, chromaKeyUsed);
       } else {
         const reference = await getModelReference();
-        if (!reference) throw new Error("Нет фото для примерки. Добавь своё фото в «Настройках».");
+        if (!reference) throw new Error("Нет фото для примерки. Добавь своё фото в «Профиле».");
         const garment = await blobs.get(current.stages.garment.assetUrl);
         result = await modeledPhoto({ person: reference, garment, direction: stage.prompt });
       }
@@ -213,7 +213,7 @@ async function route(method, pathname, input) {
 
   if (pathname === "/api/import/jobs" && method === "POST") {
     const setup = await setupStatus();
-    if (!setup.ready) throw new HttpError(503, "Сначала укажи адрес сервера и код доступа в «Настройках».");
+    if (!setup.ready) throw new HttpError(503, "Сначала впиши код доступа в «Профиле» → «Доступ».");
     const original = await normalizeImage(dataUrlToBlob(input.imageDataUrl));
     const detected = (await analyzeClothing(original)).map(normalizeMetadata);
     const jobs = [];

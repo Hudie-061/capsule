@@ -2,8 +2,17 @@ import { blobs, kv } from "./db.js";
 
 // Build-time defaults (set in GitHub repository variables or a local .env file).
 const ENV = import.meta.env || {};
+
+// "capsule-proxy.name.workers.dev/" -> "https://capsule-proxy.name.workers.dev".
+// Without a scheme fetch() would treat the address as a path on the current site.
+export function normalizeProxyUrl(value) {
+  const url = String(value || "").trim().replace(/\/+$/, "");
+  if (!url) return "";
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
 export const DEFAULTS = {
-  proxyUrl: (ENV.VITE_PROXY_URL || "").replace(/\/$/, ""),
+  proxyUrl: normalizeProxyUrl(ENV.VITE_PROXY_URL),
 };
 
 const SETTINGS_KEY = "settings";
@@ -12,8 +21,8 @@ const MODEL_REFERENCE_KEY = "asset:model-reference";
 export async function getSettings() {
   const saved = (await kv.get(SETTINGS_KEY, {})) || {};
   return {
-    proxyUrl: saved.proxyUrl || DEFAULTS.proxyUrl,
-    accessCode: saved.accessCode || "",
+    proxyUrl: normalizeProxyUrl(saved.proxyUrl) || DEFAULTS.proxyUrl,
+    accessCode: String(saved.accessCode || "").trim(),
     modeledPhotos: saved.modeledPhotos !== false,
   };
 }
@@ -21,7 +30,7 @@ export async function getSettings() {
 export async function saveSettings(patch) {
   const current = (await kv.get(SETTINGS_KEY, {})) || {};
   const next = { ...current, ...patch };
-  if (typeof next.proxyUrl === "string") next.proxyUrl = next.proxyUrl.trim().replace(/\/$/, "");
+  if (typeof next.proxyUrl === "string") next.proxyUrl = normalizeProxyUrl(next.proxyUrl);
   if (typeof next.accessCode === "string") next.accessCode = next.accessCode.trim();
   await kv.set(SETTINGS_KEY, next);
   window.dispatchEvent(new CustomEvent("capsule:settings"));
@@ -69,6 +78,16 @@ export async function addFeedback(entry) {
   const list = await getFeedback();
   list.push({ ...entry, at: new Date().toISOString() });
   await kv.set("feedback", list.slice(-200));
+  return list;
+}
+
+// Add reasons to a rating that was already saved (one tap after "Надену сегодня").
+export async function amendFeedback(at, patch) {
+  const list = await getFeedback();
+  const index = list.findIndex((entry) => entry.at === at);
+  if (index < 0) return list;
+  list[index] = { ...list[index], ...patch };
+  await kv.set("feedback", list);
   return list;
 }
 

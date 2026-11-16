@@ -1,7 +1,7 @@
 // Capsule proxy — a Cloudflare Worker that holds the owner's Gemini API key.
 //
 // It is NOT a general Gemini pass-through. It exposes only the wardrobe tasks the
-// app needs (detect, cutout, modeled, tryon, plan, gaps, learn), builds every prompt
+// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette), builds every prompt
 // itself, pins the models, constrains outputs with JSON schemas, clips all user text,
 // and checks that free text sent to the image model is about clothing. Someone who
 // has an access code still cannot use it as a chatbot or a general image generator.
@@ -26,16 +26,20 @@ class TaskError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+// "https://name.github.io/" and "https://Name.github.io" both mean the origin https://name.github.io.
+const normalizeOrigin = (value) => String(value || "").trim().replace(/\/+$/, "").toLowerCase();
+
 function cors(request, env) {
   const origin = request.headers.get("Origin") || "";
+  const allowed = Boolean(origin) && list(env.ALLOWED_ORIGINS).map(normalizeOrigin).includes(normalizeOrigin(origin));
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-Access-Code",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
-  if (origin && list(env.ALLOWED_ORIGINS).includes(origin)) headers["Access-Control-Allow-Origin"] = origin;
-  return headers;
+  if (allowed) headers["Access-Control-Allow-Origin"] = origin;
+  return { headers, origin, allowed };
 }
 
 function json(body, status, headers) {
@@ -50,18 +54,35 @@ function safeEqual(a, b) {
 }
 
 function userFor(code, env) {
-  if (!code) return null;
+  const given = String(code || "").trim();
+  if (!given) return null;
   for (const entry of list(env.ACCESS_CODES)) {
     const index = entry.indexOf(":");
-    if (index > 0 && safeEqual(entry.slice(index + 1), code)) return entry.slice(0, index);
+    const name = entry.slice(0, index).trim();
+    if (index > 0 && name && safeEqual(entry.slice(index + 1).trim(), given)) return name;
   }
+  return null;
+}
+
+// Settings that are easy to miss when the Worker is set up in the Cloudflare dashboard instead of wrangler.
+// The message is shown in the app, so a friend can forward it to the owner.
+function setupProblem(env) {
+  if (!env.USAGE || typeof env.USAGE.get !== "function" || typeof env.USAGE.put !== "function") {
+    return "Сервер не настроен: не привязано хранилище KV с именем USAGE (Cloudflare → Worker → Settings → Bindings). Напиши владельцу приложения.";
+  }
+  if (!env.GEMINI_API_KEY) return "Сервер не настроен: не задан секрет GEMINI_API_KEY. Напиши владельцу приложения.";
   return null;
 }
 
 const day = () => new Date().toISOString().slice(0, 10);
 const month = () => new Date().toISOString().slice(0, 7);
 const count = async (env, key) => int(await env.USAGE.get(key), 0);
-async function bump(env, key, ttl) { await env.USAGE.put(key, String((await count(env, key)) + 1), { expirationTtl: ttl }); }
+// Counting runs after Gemini already answered. If KV fails here (for example the free daily write
+// quota is used up), the user still gets the paid-for result; the error goes to the Worker logs.
+async function bump(env, key, ttl) {
+  try { await env.USAGE.put(key, String((await count(env, key)) + 1), { expirationTtl: ttl }); }
+  catch (error) { console.error("capsule-proxy: usage counter not saved", key, error?.message || error); }
+}
 const limits = (env) => ({ text: int(env.DAILY_TEXT_LIMIT, 150), image: int(env.DAILY_IMAGE_LIMIT, 25), monthlyImages: int(env.MONTHLY_IMAGE_BUDGET, 140) });
 const models = (env) => ({ text: env.TEXT_MODEL || "gemini-3.1-flash-lite", image: env.IMAGE_MODEL || "gemini-3.1-flash-image" });
 
@@ -69,7 +90,7 @@ const models = (env) => ({ text: env.TEXT_MODEL || "gemini-3.1-flash-lite", imag
 // Strip control characters and clip. All user text is treated as data, never as instructions.
 function text(value, max) {
   if (typeof value !== "string") return "";
-  return value.replace(/[\u0000-\u001f\u007f​-‏‪-‮⁠-⁤]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+  return value.replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
 function image(value, label = "image") {
@@ -189,7 +210,7 @@ const DETECT_PROMPT = `Identify every distinct wearable clothing item visible in
 For each item return:
 - box_2d: a tight bounding box around only that item as [ymin, xmin, ymax, xmax], integers normalised to 0-1000.
 - part: one of upperbody (t-shirts, shirts, hoodies, sweaters), wholebody_up (jackets, coats, outerwear, dresses), lowerbody (trousers, jeans, shorts, skirts), accessories_up (bags, hats, belts, scarves), shoes.
-- name: a concise specific name in Russian, e.g. "Бежевая оверсайз-футболка".
+- name: in Russian, always "colour + garment type", 2-3 words, the colour adjective agreeing in gender and number with the noun, e.g. "Чёрный бомбер", "Синие джинсы", "Белая футболка", "Бежевая оверсайз-футболка".
 - color: primary colour as #rrggbb; secondaryColor: a genuinely distinct second colour as #rrggbb or an empty string.
 - tags: 1-4 short lowercase details in Russian (fit, fabric, style), e.g. "оверсайз", "варёный", "бэгги".`;
 
@@ -239,10 +260,45 @@ const GAPS_SCHEMA = {
   type: "OBJECT",
   properties: {
     summary: { type: "STRING" },
-    items: { type: "ARRAY", items: { type: "OBJECT", properties: { item: { type: "STRING" }, why: { type: "STRING" }, pairsWith: { type: "ARRAY", items: { type: "STRING" } }, priority: { type: "STRING", enum: ["high", "medium", "low"] } }, required: ["item", "why", "pairsWith", "priority"] } },
+    items: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          item: { type: "STRING" }, why: { type: "STRING" }, pairsWith: { type: "ARRAY", items: { type: "STRING" } }, priority: { type: "STRING", enum: ["high", "medium", "low"] },
+          part: { type: "STRING", enum: PARTS }, color: { type: "STRING" }, query: { type: "STRING" },
+        },
+        required: ["item", "why", "pairsWith", "priority", "part", "color", "query"],
+      },
+    },
   },
   required: ["summary", "items"],
 };
+
+const PALETTE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    isPerson: { type: "BOOLEAN" },
+    season: { type: "STRING" }, undertone: { type: "STRING" }, contrast: { type: "STRING" },
+    best: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, hex: { type: "STRING" } }, required: ["name", "hex"] } },
+    avoid: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, hex: { type: "STRING" } }, required: ["name", "hex"] } },
+    metal: { type: "OBJECT", properties: { name: { type: "STRING" }, good: { type: "ARRAY", items: { type: "STRING" } }, avoid: { type: "STRING" } }, required: ["name", "good", "avoid"] },
+    jewelry: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, note: { type: "STRING" } }, required: ["name", "note"] } },
+  },
+  required: ["isPerson", "season", "undertone", "contrast", "best", "avoid", "metal", "jewelry"],
+};
+
+const PALETTE_PROMPT = `This is a selfie sent to a wardrobe app for a personal colour analysis. The result is used ONLY to choose clothing colours, metals and accessories near the face.
+Look at skin undertone, hair and eye colour, and the contrast between them, under the lighting of the photo.
+If the photo does not clearly show one real person's face, return isPerson false, empty strings and empty lists.
+Otherwise return isPerson true and, all text in Russian:
+- season: the seasonal colour type, e.g. "Мягкая осень", "Холодная зима", "Светлая весна".
+- undertone: short, e.g. "тёплый подтон"; contrast: short, e.g. "средний контраст".
+- best: exactly 8 clothing colours that suit them: short Russian name (1-2 words) and #rrggbb.
+- avoid: exactly 4 colours to avoid near the face: short Russian name and #rrggbb.
+- metal: name of the metals that suit them (e.g. "Золото и бронза"), good: 2 metal colours as #rrggbb, avoid: 1 metal colour to avoid as #rrggbb.
+- jewelry: exactly 4 accessories that suit them (watch, chain, ring, glasses, scarf...): name and a short note about material or colour.
+Describe only colours. Never comment on attractiveness, ethnicity, age, body or health.`;
 
 const LEARN_SCHEMA = {
   type: "OBJECT",
@@ -356,15 +412,38 @@ ${JSON.stringify(catalog(items))}
 PAST RATINGS
 ${feedbackText(fb, items)}
 
-For each piece: "item" = specific clothing description (type, colour, fit, fabric), "why" = one sentence, "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low. "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write in Russian.`;
+For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence, "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
       const result = await askJson(env, prompt, GAPS_SCHEMA, { temperature: 0.5 });
       const ids = new Set(items.map((i) => i.id));
       return {
         summary: text(result.summary, 300),
         items: (Array.isArray(result.items) ? result.items : []).slice(0, 6).map((g) => ({
           item: text(g.item, 120), why: text(g.why, 220), priority: ["high", "medium", "low"].includes(g.priority) ? g.priority : "medium",
-          pairsWith: (Array.isArray(g.pairsWith) ? g.pairsWith : []).filter((id) => ids.has(id)),
+          pairsWith: [...new Set((Array.isArray(g.pairsWith) ? g.pairsWith : []).filter((id) => ids.has(id)))],
+          part: PARTS.includes(g.part) ? g.part : "upperbody",
+          color: HEX.test(g.color || "") ? g.color : "#8a7f72",
+          query: text(g.query, 100).replace(/[^\p{L}\p{N} '-]/gu, " ").replace(/\s+/g, " ").trim(),
         })),
+      };
+    },
+  },
+
+  palette: {
+    kind: "text",
+    async run(env, input) {
+      const result = await askJson(env, PALETTE_PROMPT, PALETTE_SCHEMA, { images: [image(input.image, "selfie")], temperature: 0.3 });
+      if (result.isPerson !== true) throw new TaskError(422, "На фото не видно лица. Сделай селфи при дневном свете, без фильтров.");
+      const swatches = (value, n) => (Array.isArray(value) ? value : []).filter((c) => HEX.test(c?.hex || "")).slice(0, n).map((c) => ({ name: text(c.name, 24), hex: c.hex }));
+      const metal = result.metal && typeof result.metal === "object" ? result.metal : {};
+      return {
+        season: text(result.season, 40), undertone: text(result.undertone, 40), contrast: text(result.contrast, 40),
+        best: swatches(result.best, 8), avoid: swatches(result.avoid, 4),
+        metal: {
+          name: text(metal.name, 40),
+          good: (Array.isArray(metal.good) ? metal.good : []).filter((c) => HEX.test(c || "")).slice(0, 2),
+          avoid: HEX.test(metal.avoid || "") ? metal.avoid : "",
+        },
+        jewelry: (Array.isArray(result.jewelry) ? result.jewelry : []).slice(0, 4).map((j) => ({ name: text(j?.name, 40), note: text(j?.note, 60) })).filter((j) => j.name),
       };
     },
   },
@@ -399,50 +478,74 @@ If true, update the rules:
 };
 
 // ---------------------------------------------------------------- entry
+// Every answer, including crashes, is JSON with CORS headers. Otherwise the browser hides the
+// real reason and the app can only say "Нет связи с сервером".
 export default {
   async fetch(request, env) {
-    const headers = cors(request, env);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
-    if (request.headers.get("Origin") && !headers["Access-Control-Allow-Origin"]) return json({ error: "Origin not allowed" }, 403, headers);
-
-    const user = userFor(request.headers.get("X-Access-Code"), env);
-    if (!user) return json({ error: "Invalid access code" }, 401, headers);
-
-    const url = new URL(request.url);
-    const limit = limits(env);
-
-    if (request.method === "GET" && url.pathname === "/status") {
-      const [t, i, m] = await Promise.all([count(env, `${day()}:${user}:text`), count(env, `${day()}:${user}:image`), count(env, `${month()}:all:image`)]);
-      return json({ user, remaining: { text: Math.max(0, limit.text - t), image: Math.max(0, Math.min(limit.image - i, limit.monthlyImages - m)) } }, 200, headers);
-    }
-
-    const match = url.pathname.match(/^\/api\/(\w+)$/);
-    const task = match && Object.hasOwn(TASKS, match[1]) ? TASKS[match[1]] : null;
-    if (request.method !== "POST" || !task) return json({ error: "Not found" }, 404, headers);
-
-    if (int(request.headers.get("Content-Length"), 0) > MAX_BODY) return json({ error: "Request too large" }, 413, headers);
-    const raw = await request.text();
-    if (raw.length > MAX_BODY) return json({ error: "Request too large" }, 413, headers);
-    let input;
-    try { input = JSON.parse(raw); } catch { return json({ error: "Expected JSON" }, 400, headers); }
-    if (!input || typeof input !== "object") return json({ error: "Expected JSON object" }, 400, headers);
-
-    const dayKey = `${day()}:${user}:${task.kind}`;
-    if ((await count(env, dayKey)) >= limit[task.kind]) {
-      return json({ error: task.kind === "image" ? "Дневной лимит картинок исчерпан. Попробуй завтра." : "Дневной лимит запросов исчерпан. Попробуй завтра." }, 429, headers);
-    }
-    if (task.kind === "image" && (await count(env, `${month()}:all:image`)) >= limit.monthlyImages) {
-      return json({ error: "Общий месячный лимит картинок исчерпан. Напиши владельцу приложения." }, 429, headers);
-    }
-
+    let headers = {};
     try {
-      const result = await task.run(env, input);
-      await bump(env, dayKey, 60 * 60 * 48);
-      if (task.kind === "image") await bump(env, `${month()}:all:image`, 60 * 60 * 24 * 40);
-      return json(result, 200, headers);
+      const access = cors(request, env);
+      headers = access.headers;
+      return await handle(request, env, access);
     } catch (error) {
-      const status = error instanceof TaskError ? error.status : 500;
-      return json({ error: status === 500 ? "Внутренняя ошибка сервера" : error.message }, status, headers);
+      console.error("capsule-proxy: unhandled error", error?.stack || error);
+      return json({ error: "Внутренняя ошибка сервера. Подробности — в логах Worker (Observability)." }, 500, headers);
     }
   },
 };
+
+async function handle(request, env, { headers, origin, allowed }) {
+  // A preflight or request from a site that is not in ALLOWED_ORIGINS still gets a readable 403,
+  // so the app can name the exact address to add. Such a site never reaches any task or counter.
+  const denied = { ...headers, "Access-Control-Allow-Origin": origin };
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: origin ? denied : headers });
+  if (origin && !allowed) {
+    return json({ error: `Сервер не принимает запросы с адреса ${origin}. Владельцу: добавь его в ALLOWED_ORIGINS.`, code: "origin_not_allowed", origin }, 403, denied);
+  }
+
+  if (!list(env.ACCESS_CODES).length) return json({ error: "Сервер не настроен: не задан секрет ACCESS_CODES. Напиши владельцу приложения.", code: "setup" }, 500, headers);
+  const user = userFor(request.headers.get("X-Access-Code"), env);
+  if (!user) return json({ error: "Invalid access code" }, 401, headers);
+
+  const problem = setupProblem(env);
+  if (problem) return json({ error: problem, code: "setup" }, 500, headers);
+
+  const url = new URL(request.url);
+  const limit = limits(env);
+
+  if (request.method === "GET" && url.pathname === "/status") {
+    const [t, i, m] = await Promise.all([count(env, `${day()}:${user}:text`), count(env, `${day()}:${user}:image`), count(env, `${month()}:all:image`)]);
+    return json({ user, remaining: { text: Math.max(0, limit.text - t), image: Math.max(0, Math.min(limit.image - i, limit.monthlyImages - m)) } }, 200, headers);
+  }
+
+  const match = url.pathname.match(/^\/api\/(\w+)$/);
+  const task = match && Object.hasOwn(TASKS, match[1]) ? TASKS[match[1]] : null;
+  if (request.method !== "POST" || !task) return json({ error: "Not found" }, 404, headers);
+
+  if (int(request.headers.get("Content-Length"), 0) > MAX_BODY) return json({ error: "Request too large" }, 413, headers);
+  const raw = await request.text();
+  if (raw.length > MAX_BODY) return json({ error: "Request too large" }, 413, headers);
+  let input;
+  try { input = JSON.parse(raw); } catch { return json({ error: "Expected JSON" }, 400, headers); }
+  if (!input || typeof input !== "object") return json({ error: "Expected JSON object" }, 400, headers);
+
+  const dayKey = `${day()}:${user}:${task.kind}`;
+  if ((await count(env, dayKey)) >= limit[task.kind]) {
+    return json({ error: task.kind === "image" ? "Дневной лимит картинок исчерпан. Попробуй завтра." : "Дневной лимит запросов исчерпан. Попробуй завтра." }, 429, headers);
+  }
+  if (task.kind === "image" && (await count(env, `${month()}:all:image`)) >= limit.monthlyImages) {
+    return json({ error: "Общий месячный лимит картинок исчерпан. Напиши владельцу приложения." }, 429, headers);
+  }
+
+  let result;
+  try {
+    result = await task.run(env, input);
+  } catch (error) {
+    const status = error instanceof TaskError ? error.status : 500;
+    if (status === 500) console.error(`capsule-proxy: task ${match[1]} failed`, error?.stack || error);
+    return json({ error: status === 500 ? "Внутренняя ошибка сервера" : error.message }, status, headers);
+  }
+  await bump(env, dayKey, 60 * 60 * 48);
+  if (task.kind === "image") await bump(env, `${month()}:all:image`, 60 * 60 * 24 * 40);
+  return json(result, 200, headers);
+}

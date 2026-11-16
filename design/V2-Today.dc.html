@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>v2 · Образ дня с заменой вещей</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#1E1B18}a:hover{color:#6B6259}
+button{cursor:pointer}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.rise{animation:rise .35s ease-out both}
+@keyframes pop{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
+.pop{animation:pop .3s cubic-bezier(.2,.9,.3,1.3) both}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.fade{animation:fade .3s ease-out both}
+@keyframes shine{from{background-position:-200px 0}to{background-position:200px 0}}
+.shimmer{background:linear-gradient(90deg,#E2D8CA 0%,#F4EEE5 50%,#E2D8CA 100%);background-size:400px 100%;animation:shine 1.2s linear infinite}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #F4EFE7; color: #1E1B18; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; position: relative">
+<div style="flex: 1; display: flex; flex-direction: column; padding: 52px 20px 0">
+<div style="display: flex; justify-content: space-between; align-items: center">
+<span style="font-size: 13px; color: #6B6259">{{dateText}}</span>
+<span style="display: flex; align-items: center; gap: 6px; background: #FFFDF9; border-radius: 999px; padding: 7px 12px; font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(30, 27, 24, 0.08)"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 16h10a4 4 0 0 0 0-8 5 5 0 0 0-9.6 1.5A3.5 3.5 0 0 0 7 16Z"></path></svg>{{weather}}</span>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; gap: 10px">
+<h1 style="margin: 0; font-family: 'Instrument Serif', Georgia, serif; font-weight: 400; font-size: 36px; line-height: 1">{{title}}</h1>
+<div role="group" aria-label="Когда подбирать образ" style="position: relative; height: 40px; width: 104px; flex-shrink: 0; background: #E8DFD2; border-radius: 14px; padding: 4px; box-sizing: border-box; display: flex">
+<div style="position: absolute; top: 4px; bottom: 4px; width: 48px; left: {{thumbLeft}}; background: #FFFDF9; border-radius: 10px; box-shadow: 0 3px 10px rgba(30, 27, 24, 0.12); transition: left 0.35s cubic-bezier(.2, .8, .2, 1)"></div>
+<button aria-label="Образ утром" aria-pressed="{{morningPressed}}" onClick="{{setMorning}}" style="position: relative; flex: 1; border: 0; background: none; display: flex; align-items: center; justify-content: center; color: {{morningColor}}"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"></path></svg></button>
+<button aria-label="Образ с вечера" aria-pressed="{{eveningPressed}}" onClick="{{setEvening}}" style="position: relative; flex: 1; border: 0; background: none; display: flex; align-items: center; justify-content: center; color: {{eveningColor}}"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a7 7 0 1 0 10.5 10.5Z"></path></svg></button>
+</div>
+</div>
+<div style="margin-top: 16px; height: 368px; perspective: 1400px">
+<div style="position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transform: {{flipT}}; transition: transform 0.75s cubic-bezier(.2, .8, .2, 1)">
+<div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; background: #FFFDF9; border: 1px solid #E5DACB; border-radius: 28px; padding: 14px; box-sizing: border-box; box-shadow: 0 16px 34px rgba(30, 27, 24, 0.12); display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 0 4px; gap: 8px">
+<div style="display: flex; flex-direction: column; gap: 6px; min-width: 0">
+<div style="font-family: 'Instrument Serif', Georgia, serif; font-size: 23px; line-height: 1.05">{{cardTitle}}</div>
+<div style="display: flex; gap: 6px">
+<span style="background: #F1EAE0; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; color: #574D44">Учёба</span>
+<span style="background: #F1EAE0; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; color: #574D44">{{tempTag}}</span>
+</div>
+</div>
+<button onClick="{{flip}}" style="flex-shrink: 0; min-height: 40px; border-radius: 999px; border: 0; background: #1E1B18; color: #F4EFE7; padding: 0 14px 0 10px; display: flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; font-weight: 600"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.5"></circle><path d="M8 21l1-8-3-1 2-4h8l2 4-3 1 1 8"></path></svg>На человеке</button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+<sc-for list="{{slots}}" as="s" hint-placeholder-count="4">
+<button onClick="{{s.open}}" aria-label="{{s.aria}}" style="height: 128px; border-radius: 18px; border: 0; background: #EAE2D6; position: relative; display: flex; align-items: center; justify-content: center; padding: 0; font: inherit; color: #1E1B18">
+<svg aria-hidden="true" width="92" height="92" viewBox="0 0 120 120">
+<sc-if value="{{s.isJacket}}" hint-placeholder-val="{{false}}"><path d="M42 16 L60 24 L78 16 L102 30 L108 104 L86 104 L84 58 L80 104 L40 104 L36 58 L34 104 L12 104 L18 30 Z" fill="{{s.fill}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path></sc-if>
+<sc-if value="{{s.isTee}}" hint-placeholder-val="{{false}}"><path d="M40 18 L52 14 Q60 24 68 14 L80 18 L106 38 L94 54 L84 47 L84 106 L36 106 L36 47 L26 54 L14 38 Z" fill="{{s.fill}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path></sc-if>
+<sc-if value="{{s.isPants}}" hint-placeholder-val="{{false}}"><path d="M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z" fill="{{s.fill}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path></sc-if>
+<sc-if value="{{s.isShoes}}" hint-placeholder-val="{{false}}"><path d="M12 76 L16 52 Q30 58 42 48 L58 58 Q82 66 102 70 Q110 72 110 82 L110 88 L12 88 Z" fill="{{s.fill}}" stroke="#1E1B18" stroke-opacity="0.3" stroke-width="2" style="transition: fill 0.4s"></path></sc-if>
+</svg>
+<span style="position: absolute; left: 12px; bottom: 10px; font-size: 12px; font-weight: 600; color: #574D44">{{s.name}}</span>
+<span aria-hidden="true" style="position: absolute; right: 8px; top: 8px; width: 30px; height: 30px; border-radius: 15px; background: #FFFDF9; box-shadow: 0 2px 6px rgba(30, 27, 24, 0.12); display: flex; align-items: center; justify-content: center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1E1B18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"></path></svg></span>
+</button>
+</sc-for>
+</div>
+</div>
+<div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; transform: rotateY(180deg); background: #FFFDF9; border: 1px solid #E5DACB; border-radius: 28px; padding: 14px; box-sizing: border-box; box-shadow: 0 16px 34px rgba(30, 27, 24, 0.12); display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+<div role="group" aria-label="Как показать образ" style="position: relative; height: 40px; width: 200px; background: #EFE7DC; border-radius: 14px; padding: 4px; box-sizing: border-box; display: flex">
+<div style="position: absolute; top: 4px; bottom: 4px; width: 96px; left: {{viewThumb}}; background: #FFFDF9; border-radius: 10px; box-shadow: 0 3px 10px rgba(30, 27, 24, 0.12); transition: left 0.35s cubic-bezier(.2, .8, .2, 1)"></div>
+<button onClick="{{showMannequin}}" aria-pressed="{{manPressed}}" style="position: relative; flex: 1; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: {{manColor}}">Манекен</button>
+<button onClick="{{showMe}}" aria-pressed="{{mePressed}}" style="position: relative; flex: 1; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: {{meColor}}">На мне</button>
+</div>
+<button onClick="{{flip}}" style="min-height: 40px; border-radius: 999px; border: 1px solid #E5DACB; background: #FFFDF9; color: #1E1B18; padding: 0 12px; display: flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; font-weight: 600"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect></svg>Вещи</button>
+</div>
+<div style="flex: 1; border-radius: 20px; background: #EAE2D6; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center">
+<sc-if value="{{showFigure}}" hint-placeholder-val="{{true}}">
+<div style="position: relative; width: 320px; height: 286px; flex-shrink: 0">
+<button onClick="{{toggleCallouts}}" aria-label="{{figAria}}" aria-expanded="{{calloutsExpanded}}" style="position: absolute; left: 77px; top: 10px; width: 166px; height: 266px; padding: 0; border: 0; background: none">
+<svg aria-hidden="true" width="166" height="266" viewBox="0 0 200 320" class="rise">
+<circle cx="100" cy="36" r="20" fill="#D3C8BA"></circle>
+<rect x="92" y="54" width="16" height="14" fill="#D3C8BA"></rect>
+<circle cx="40" cy="184" r="7" fill="#D3C8BA"></circle>
+<circle cx="160" cy="184" r="7" fill="#D3C8BA"></circle>
+<path d="M62 184 L138 184 L146 292 L106 292 L100 214 L94 292 L54 292 Z" fill="{{fig.pants}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path>
+<path d="M60 70 L84 64 Q100 74 116 64 L140 70 L162 104 L148 114 L140 106 L140 186 L60 186 L60 106 L52 114 L38 104 Z" fill="{{fig.tee}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path>
+<path d="M84 64 L60 70 L36 102 L32 176 L48 178 L52 120 L54 188 L88 188 L92 112 Z" fill="{{fig.jacket}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path>
+<path d="M116 64 L140 70 L164 102 L168 176 L152 178 L148 120 L146 188 L112 188 L108 112 Z" fill="{{fig.jacket}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2" style="transition: fill 0.4s"></path>
+<path d="M50 292 L96 292 Q98 304 92 306 L44 306 Q40 300 50 292 Z" fill="{{fig.shoes}}" stroke="#1E1B18" stroke-opacity="0.35" stroke-width="2" style="transition: fill 0.4s"></path>
+<path d="M104 292 L150 292 Q160 300 156 306 L108 306 Q102 304 104 292 Z" fill="{{fig.shoes}}" stroke="#1E1B18" stroke-opacity="0.35" stroke-width="2" style="transition: fill 0.4s"></path>
+</svg>
+</button>
+<sc-if value="{{callouts}}" hint-placeholder-val="{{false}}">
+<svg aria-hidden="true" class="fade" width="320" height="286" viewBox="0 0 320 286" style="position: absolute; left: 0; top: 0; pointer-events: none">
+<path d="M96 117 L113 126" stroke="#1E1B18" stroke-width="1.5" fill="none"></path><circle cx="113" cy="126" r="4" fill="#1E1B18"></circle>
+<path d="M224 87 L160 93" stroke="#1E1B18" stroke-width="1.5" fill="none"></path><circle cx="160" cy="93" r="4" fill="#1E1B18"></circle>
+<path d="M224 217 L178 217" stroke="#1E1B18" stroke-width="1.5" fill="none"></path><circle cx="178" cy="217" r="4" fill="#1E1B18"></circle>
+<path d="M96 253 L137 259" stroke="#1E1B18" stroke-width="1.5" fill="none"></path><circle cx="137" cy="259" r="4" fill="#1E1B18"></circle>
+</svg>
+<sc-for list="{{tags2}}" as="c" hint-placeholder-count="4">
+<button onClick="{{c.open}}" aria-label="{{c.aria}}" class="pop" style="position: absolute; left: {{c.left}}; right: {{c.right}}; top: {{c.top}}; width: 92px; min-height: 34px; box-sizing: border-box; padding: 6px 8px; border-radius: 12px; border: 1px solid #E5DACB; background: #FFFDF9; box-shadow: 0 6px 14px rgba(30, 27, 24, 0.14); display: flex; align-items: center; gap: 6px; font: inherit; font-size: 11.5px; font-weight: 600; line-height: 1.2; color: #1E1B18; text-align: left; animation-delay: {{c.delay}}">
+<span aria-hidden="true" style="width: 10px; height: 10px; flex-shrink: 0; border-radius: 5px; background: {{c.fill}}; border: 1px solid rgba(30, 27, 24, 0.3); transition: background 0.4s"></span>
+<span style="flex: 1; min-width: 0">{{c.name}}</span>
+</button>
+</sc-for>
+</sc-if>
+</div>
+<span style="position: absolute; left: 12px; bottom: 12px; background: #FFFDF9; border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; color: #574D44; pointer-events: none">{{figCaption}}</span>
+</sc-if>
+<sc-if value="{{showUpload}}" hint-placeholder-val="{{false}}">
+<div class="rise" style="position: absolute; left: 10px; right: 10px; top: 10px; bottom: 10px; border: 2px dashed #BFB2A0; border-radius: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; text-align: center">
+<span aria-hidden="true" style="width: 56px; height: 56px; border-radius: 28px; background: #FFFDF9; display: flex; align-items: center; justify-content: center"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1E1B18" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4Z"></path><circle cx="12" cy="13" r="3.5"></circle></svg></span>
+<span style="font-family: 'Instrument Serif', Georgia, serif; font-size: 24px; line-height: 1.05">Примерь на себе</span>
+<span style="font-size: 13px; line-height: 1.4; color: #574D44">Загрузи одно фото в полный рост — ИИ наденет на тебя этот образ</span>
+<button onClick="{{startTryOn}}" style="margin-top: 4px; min-height: 46px; border-radius: 999px; border: 0; background: #1E1B18; color: #F4EFE7; padding: 0 22px; font: inherit; font-size: 14px; font-weight: 600">Выбрать фото</button>
+<span style="font-size: 11px; color: #6B6259">Фото хранится только у тебя</span>
+</div>
+</sc-if>
+<sc-if value="{{showLoading}}" hint-placeholder-val="{{false}}">
+<div style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px">
+<div class="shimmer" style="width: 150px; height: 220px; border-radius: 18px"></div>
+<span style="font-size: 14px; font-weight: 600">Примеряю образ…</span>
+</div>
+</sc-if>
+</div>
+</div>
+</div>
+</div>
+<div style="display: flex; gap: 10px; margin-top: 16px">
+<button style="flex: 1; height: 52px; border-radius: 26px; border: 1px solid #1E1B18; background: transparent; color: #1E1B18; font: inherit; font-size: 15px; font-weight: 500">Другой образ</button>
+<button style="flex: 2; height: 52px; border-radius: 26px; border: 0; background: #1E1B18; color: #F4EFE7; font: inherit; font-size: 15px; font-weight: 600; box-shadow: 0 8px 18px rgba(30, 27, 24, 0.25)">{{wearLabel}}</button>
+</div>
+<p style="margin: 12px 0 0; text-align: center; font-size: 13px; color: #6B6259">Нажми на вещь, чтобы заменить её</p>
+</div>
+<nav aria-label="Навигация" style="height: 84px; box-sizing: border-box; padding: 8px 8px 22px; display: flex; justify-content: space-around; align-items: center; border-top: 1px solid #E2D9CC; background: #F4EFE7">
+<button style="background: none; border: 0; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 11px; font-weight: 600; color: #1E1B18"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>Сегодня</button>
+<button style="background: none; border: 0; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 11px; font-weight: 500; color: #6B6259"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6a2 2 0 1 1 3 1.7c-.6.4-1 .9-1 1.6V10"></path><path d="M12 10 L3 16.5 Q2 18 4 18 L20 18 Q22 18 21 16.5 Z"></path></svg>Гардероб</button>
+<button aria-label="Добавить вещи" style="width: 52px; height: 52px; border-radius: 26px; border: 0; background: #1E1B18; color: #F4EFE7; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+<a href="V2-Shopping.dc.html" style="text-decoration: none; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 11px; font-weight: 500; color: #6B6259"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6Z"></path><path d="M9 8V6a3 3 0 0 1 6 0v2"></path></svg>Покупки</a>
+<button style="background: none; border: 0; min-width: 60px; min-height: 44px; display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 11px; font-weight: 500; color: #6B6259"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"></path></svg>Профиль</button>
+</nav>
+<div onClick="{{close}}" style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; background: rgba(30, 27, 24, 0.4); opacity: {{backdropOpacity}}; pointer-events: {{backdropEvents}}; transition: opacity 0.3s"></div>
+<div role="dialog" aria-label="{{sheetTitle}}" style="position: absolute; left: 0; right: 0; bottom: 0; background: #F4EFE7; border-radius: 28px 28px 0 0; padding: 10px 20px 30px; box-sizing: border-box; box-shadow: 0 -12px 30px rgba(30, 27, 24, 0.18); transform: {{sheetY}}; transition: transform 0.4s cubic-bezier(.2, .8, .2, 1); display: flex; flex-direction: column; gap: 14px">
+<div aria-hidden="true" style="align-self: center; width: 40px; height: 5px; border-radius: 3px; background: #CFC3B2"></div>
+<div style="display: flex; justify-content: space-between; align-items: flex-start">
+<div>
+<div style="font-family: 'Instrument Serif', Georgia, serif; font-size: 28px; line-height: 1.05">{{sheetTitle}}</div>
+<div style="margin-top: 4px; font-size: 13px; color: #6B6259">Из твоего гардероба · подходят к образу</div>
+</div>
+<button aria-label="Закрыть" onClick="{{close}}" style="width: 40px; height: 40px; border-radius: 20px; border: 1px solid #E5DACB; background: #FFFDF9; color: #1E1B18; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+<sc-for list="{{alts}}" as="a" hint-placeholder-count="4">
+<button onClick="{{a.pick}}" aria-pressed="{{a.pressed}}" style="border-radius: 20px; border: {{a.border}}; background: #FFFDF9; padding: 8px; display: flex; flex-direction: column; gap: 8px; font: inherit; color: #1E1B18; text-align: left; box-shadow: {{a.shadow}}; transition: box-shadow 0.25s">
+<span style="height: 92px; border-radius: 14px; background: #EAE2D6; display: flex; align-items: center; justify-content: center; position: relative">
+<svg aria-hidden="true" width="72" height="72" viewBox="0 0 120 120">
+<sc-if value="{{a.isJacket}}" hint-placeholder-val="{{false}}"><path d="M42 16 L60 24 L78 16 L102 30 L108 104 L86 104 L84 58 L80 104 L40 104 L36 58 L34 104 L12 104 L18 30 Z" fill="{{a.fill}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2"></path></sc-if>
+<sc-if value="{{a.isTee}}" hint-placeholder-val="{{false}}"><path d="M40 18 L52 14 Q60 24 68 14 L80 18 L106 38 L94 54 L84 47 L84 106 L36 106 L36 47 L26 54 L14 38 Z" fill="{{a.fill}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2"></path></sc-if>
+<sc-if value="{{a.isPants}}" hint-placeholder-val="{{true}}"><path d="M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z" fill="{{a.fill}}" stroke="#1E1B18" stroke-opacity="0.25" stroke-width="2"></path></sc-if>
+<sc-if value="{{a.isShoes}}" hint-placeholder-val="{{false}}"><path d="M12 76 L16 52 Q30 58 42 48 L58 58 Q82 66 102 70 Q110 72 110 82 L110 88 L12 88 Z" fill="{{a.fill}}" stroke="#1E1B18" stroke-opacity="0.3" stroke-width="2"></path></sc-if>
+</svg>
+<sc-if value="{{a.isCurrent}}" hint-placeholder-val="{{false}}"><span style="position: absolute; left: 8px; top: 8px; background: #1E1B18; color: #F4EFE7; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600">Сейчас</span></sc-if>
+</span>
+<span style="padding: 0 4px; display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 14px; font-weight: 600">{{a.name}}</span>
+<span style="font-size: 12px; color: #6B6259">{{a.note}}</span>
+</span>
+</button>
+</sc-for>
+</div>
+<a href="V2-Shopping.dc.html" style="text-decoration: none; display: flex; align-items: center; gap: 12px; background: #1E1B18; color: #F4EFE7; border-radius: 20px; padding: 14px 16px">
+<span aria-hidden="true" style="width: 40px; height: 40px; border-radius: 12px; background: #3A342E; display: flex; align-items: center; justify-content: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F4EFE7" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6Z"></path><path d="M9 8V6a3 3 0 0 1 6 0v2"></path></svg></span>
+<span style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 15px; font-weight: 600">Нет подходящих? Найдём дешевле</span>
+<span style="font-size: 12px; color: #CFC6BA">{{shopHint}}</span>
+</span>
+<svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#F4EFE7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"></path></svg>
+</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { mode: 'morning', open: null, pick: { jacket: 0, tee: 0, pants: 0, shoes: 0 }, flipped: false, view: 'mannequin', tryon: 'idle', callouts: false };
+}
+componentWillUnmount() {
+if (this.timer) clearTimeout(this.timer);
+}
+renderVals() {
+var self = this;
+var s = this.state;
+var ev = s.mode === 'evening';
+var wardrobe = {
+jacket: { label: 'Верх', sheet: 'Заменить верх', items: [
+{ name: 'Коричневый овершот', fill: '#8A6A4F', note: 'Тепло до +5°' },
+{ name: 'Чёрный бомбер', fill: '#2B2724', note: 'Сочетается со всем' },
+{ name: 'Серое худи', fill: '#A9A39B', note: 'Спортивнее' },
+{ name: 'Бежевый флис', fill: '#D8CBB6', note: 'Мягкий, тёплый' } ] },
+tee: { label: 'Футболка', sheet: 'Заменить футболку', items: [
+{ name: 'Белая футболка', fill: '#FBF8F2', note: 'Оверсайз' },
+{ name: 'Серый лонгслив', fill: '#BDB6AC', note: 'Теплее' },
+{ name: 'Чёрная футболка', fill: '#2B2724', note: 'Контрастнее' },
+{ name: 'Оливковое поло', fill: '#7C7A55', note: 'Аккуратнее' } ] },
+pants: { label: 'Джинсы', sheet: 'Заменить джинсы', items: [
+{ name: 'Голубые джинсы', fill: '#A9B8C9', note: 'Высокая посадка' },
+{ name: 'Синие джинсы', fill: '#3C4A63', note: 'Строже' },
+{ name: 'Бежевые брюки', fill: '#D9C7AE', note: 'В тон образу' },
+{ name: 'Карго хаки', fill: '#8C8466', note: 'Спортивнее' } ] },
+shoes: { label: 'Обувь', sheet: 'Заменить обувь', items: [
+{ name: 'Белые кроссовки', fill: '#FFFFFF', note: 'Базовые' },
+{ name: 'Серые кроссовки', fill: '#C9C4BC', note: 'Не маркие' },
+{ name: 'Коричневые ботинки', fill: '#6E4F35', note: 'Для дождя' },
+{ name: 'Чёрные кеды', fill: '#2B2724', note: 'Лёгкие' } ] }
+};
+var keys = ['jacket', 'tee', 'pants', 'shoes'];
+var shopHints = { jacket: 'Тёплая куртка от €34 б/у · до −€55', tee: 'Базовые футболки от €9 · до −€15', pants: 'Тёмные джинсы от €22 · до −€27', shoes: 'Ботинки от €52 б/у · до −€67' };
+var openKey = s.open;
+var alts = [];
+if (openKey) {
+alts = wardrobe[openKey].items.map(function (it, i) {
+var cur = s.pick[openKey] === i;
+return {
+name: it.name, fill: it.fill, note: it.note,
+isJacket: openKey === 'jacket', isTee: openKey === 'tee', isPants: openKey === 'pants', isShoes: openKey === 'shoes',
+isCurrent: cur,
+pressed: cur ? 'true' : 'false',
+border: cur ? '2px solid #1E1B18' : '1px solid #E5DACB',
+shadow: cur ? '0 8px 18px rgba(30, 27, 24, 0.12)' : 'none',
+pick: function () {
+var p = Object.assign({}, self.state.pick);
+p[openKey] = i;
+self.setState({ pick: p, open: null });
+}
+};
+});
+}
+var cur = function (k) { return wardrobe[k].items[s.pick[k]].fill; };
+var me = s.view === 'me';
+return {
+flipT: s.flipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
+flip: function () { self.setState({ flipped: !self.state.flipped, open: null }); },
+viewThumb: me ? '100px' : '4px',
+manPressed: me ? 'false' : 'true',
+mePressed: me ? 'true' : 'false',
+manColor: me ? '#6B6259' : '#1E1B18',
+meColor: me ? '#1E1B18' : '#6B6259',
+showMannequin: function () { self.setState({ view: 'mannequin' }); },
+showMe: function () { self.setState({ view: 'me' }); },
+showFigure: !me || s.tryon === 'done',
+showUpload: me && s.tryon === 'idle',
+showLoading: me && s.tryon === 'loading',
+figCaption: me ? 'Здесь будет ИИ-примерка на твоём фото' : (s.callouts ? 'Нажми на вещь, чтобы заменить' : 'Нажми на манекен — покажу вещи'),
+callouts: s.callouts,
+calloutsExpanded: s.callouts ? 'true' : 'false',
+figAria: s.callouts ? 'Скрыть подписи вещей' : 'Показать подписи вещей',
+toggleCallouts: function () { self.setState({ callouts: !self.state.callouts }); },
+tags2: [
+{ k: 'jacket', left: '4px', right: 'auto', top: '100px' },
+{ k: 'tee', left: 'auto', right: '4px', top: '70px' },
+{ k: 'pants', left: 'auto', right: '4px', top: '200px' },
+{ k: 'shoes', left: '4px', right: 'auto', top: '236px' }
+].map(function (c, i) {
+var it = wardrobe[c.k].items[s.pick[c.k]];
+return {
+name: it.name, fill: it.fill,
+left: c.left, right: c.right, top: c.top,
+delay: (i * 0.06) + 's',
+aria: 'Заменить: ' + it.name,
+open: function () { self.setState({ open: c.k }); }
+};
+}),
+fig: { jacket: cur('jacket'), tee: cur('tee'), pants: cur('pants'), shoes: cur('shoes') },
+startTryOn: function () {
+self.setState({ tryon: 'loading' });
+if (self.timer) clearTimeout(self.timer);
+self.timer = setTimeout(function () { self.setState({ tryon: 'done' }); }, 1800);
+},
+dateText: ev ? 'Завтра · вторник, 17 ноября' : 'Понедельник, 16 ноября',
+weather: ev ? 'Завтра 6° · дождь' : '9° · облачно',
+title: ev ? 'На завтра' : 'На сегодня',
+cardTitle: ev ? 'Дождливый вторник' : 'Тёплая база в бежевом',
+tempTag: ev ? '+6° · дождь' : '+9°',
+wearLabel: ev ? 'Готово, надену завтра' : 'Надену сегодня',
+thumbLeft: ev ? '52px' : '4px',
+morningColor: ev ? '#6B6259' : '#1E1B18',
+eveningColor: ev ? '#1E1B18' : '#6B6259',
+morningPressed: ev ? 'false' : 'true',
+eveningPressed: ev ? 'true' : 'false',
+setMorning: function () { self.setState({ mode: 'morning' }); },
+setEvening: function () { self.setState({ mode: 'evening' }); },
+slots: keys.map(function (k) {
+var it = wardrobe[k].items[s.pick[k]];
+return {
+name: it.name, fill: it.fill,
+aria: 'Заменить: ' + it.name,
+isJacket: k === 'jacket', isTee: k === 'tee', isPants: k === 'pants', isShoes: k === 'shoes',
+open: function () { self.setState({ open: k }); }
+};
+}),
+close: function () { self.setState({ open: null }); },
+sheetY: openKey ? 'translateY(0)' : 'translateY(105%)',
+backdropOpacity: openKey ? '1' : '0',
+backdropEvents: openKey ? 'auto' : 'none',
+sheetTitle: openKey ? wardrobe[openKey].sheet : 'Заменить вещь',
+shopHint: openKey ? shopHints[openKey] : '',
+alts: alts
+};
+}
+}
+</script>
+</body>
+</html>

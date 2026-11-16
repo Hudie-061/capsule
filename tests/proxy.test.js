@@ -30,10 +30,12 @@ const call = (path, body, { code = "abc123", origin = "https://huy.github.io", m
 // Fake Gemini: answers based on what the proxy asked, records every upstream call.
 let upstream;
 let topicVerdict;
+let paletteIsPerson;
 const reply = (obj) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] } }] }), { status: 200 });
 beforeEach(() => {
   upstream = [];
   topicVerdict = true;
+  paletteIsPerson = true;
   vi.stubGlobal("fetch", vi.fn(async (url, init) => {
     const body = JSON.parse(init.body);
     const prompt = body.contents[0].parts[0].text;
@@ -42,6 +44,15 @@ beforeEach(() => {
     if (prompt.startsWith("Is the following user text")) return reply({ onTopic: topicVerdict });
     if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true }] });
+    if (prompt.includes("recommend at most 6")) {
+      return reply({ summary: "s", items: [
+        { item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a", "a", "ghost"], part: "lowerbody", color: "#2b3a55", query: "dark straight jeans?!" },
+        { item: "Что-то", why: "ok", priority: "low", pairsWith: [], part: "spaceship", color: "red", query: "x" },
+      ] });
+    }
+    if (prompt.includes("personal colour analysis")) {
+      return reply({ isPerson: paletteIsPerson, season: "Мягкая осень", undertone: "тёплый", contrast: "средний", best: [{ name: "Олива", hex: "#6f6b3e" }, { name: "Плохой", hex: "olive" }], avoid: [], metal: { name: "Золото", good: ["#c9a24a", "gold"], avoid: "silver" }, jewelry: [{ name: "Часы", note: "кожа" }] });
+    }
     if (prompt.includes("maintain a short memory")) {
       const aboutClothing = !prompt.includes("войн");
       return reply({ aboutClothing, rules: aboutClothing ? ["Не предлагать бэгги-джинсы"] : ["SHOULD NOT BE SAVED"], remembered: aboutClothing ? "Запомнил" : "" });
@@ -64,6 +75,66 @@ describe("access control", () => {
     const pre = await worker.fetch(new Request("https://proxy.test/api/plan", { method: "OPTIONS", headers: { Origin: "https://localhost" } }), env());
     expect(pre.status).toBe(204);
     expect(pre.headers.get("Access-Control-Allow-Origin")).toBe("https://localhost");
+  });
+});
+
+describe("readable errors instead of 'Failed to fetch'", () => {
+  it("answers a foreign origin with a readable 403 that names the origin and runs nothing", async () => {
+    const pre = await worker.fetch(new Request("https://proxy.test/status", { method: "OPTIONS", headers: { Origin: "http://localhost:5173" } }), env());
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+    const e = env();
+    const res = await worker.fetch(call("/api/plan", { wardrobe }, { origin: "http://localhost:5173" }), e);
+    expect(res.status).toBe(403);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+    const body = await res.json();
+    expect(body.code).toBe("origin_not_allowed");
+    expect(body.error).toContain("http://localhost:5173");
+    expect(upstream).toHaveLength(0);
+    expect([...e.USAGE.map.keys()]).toHaveLength(0);
+  });
+
+  it("accepts origins written with a trailing slash or capitals in ALLOWED_ORIGINS", async () => {
+    const res = await worker.fetch(call("/status", null, { method: "GET" }), env({ ALLOWED_ORIGINS: " https://Huy.github.io/ ,https://localhost" }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://huy.github.io");
+  });
+
+  it("explains a missing KV binding with CORS headers instead of crashing", async () => {
+    const res = await worker.fetch(call("/status", null, { method: "GET" }), env({ USAGE: undefined }));
+    expect(res.status).toBe(500);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://huy.github.io");
+    expect((await res.json()).error).toMatch(/KV.*USAGE/);
+  });
+
+  it("explains a missing Gemini key and missing access codes", async () => {
+    expect((await (await worker.fetch(call("/status", null, { method: "GET" }), env({ GEMINI_API_KEY: "" }))).json()).error).toMatch(/GEMINI_API_KEY/);
+    const res = await worker.fetch(call("/status", null, { method: "GET" }), env({ ACCESS_CODES: "" }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/ACCESS_CODES/);
+  });
+
+  it("turns any unexpected crash into JSON with CORS headers", async () => {
+    const broken = { get: async () => { throw new Error("KV exploded"); }, put: async () => {} };
+    const res = await worker.fetch(call("/status", null, { method: "GET" }), env({ USAGE: broken }));
+    expect(res.status).toBe(500);
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://huy.github.io");
+    const body = await res.json();
+    expect(body.error).toMatch(/Внутренняя ошибка/);
+    expect(JSON.stringify(body)).not.toContain("SECRET-KEY");
+  });
+
+  it("still returns the result when the usage counter cannot be saved", async () => {
+    const store = kvStore();
+    store.put = async () => { throw new Error("KV write limit"); };
+    const res = await worker.fetch(call("/api/detect", { image: PNG }), env({ USAGE: store }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).items).toHaveLength(1);
+  });
+
+  it("tolerates spaces around names and codes in ACCESS_CODES", async () => {
+    const res = await worker.fetch(call("/status", null, { method: "GET", code: " abc123 " }), env({ ACCESS_CODES: "huy : abc123 , anna:zzz999" }));
+    expect((await res.json()).user).toBe("huy");
   });
 });
 
@@ -124,6 +195,26 @@ describe("no general-purpose access", () => {
     expect(await res.json()).toEqual({ rules: ["Старое правило"], remembered: "", ignored: true });
     const ok = await (await worker.fetch(call("/api/learn", { comment: "не люблю бэгги", outfitItems: wardrobe, liked: false, rules: [] }), env())).json();
     expect(ok.rules).toEqual(["Не предлагать бэгги-джинсы"]);
+  });
+
+  it("returns shopping gaps with a category, colour and a clean search query", async () => {
+    const res = await worker.fetch(call("/api/gaps", { wardrobe }), env());
+    const out = await res.json();
+    expect(upstream[0].prompt).toContain("colour + garment type");
+    expect(out.items[0]).toEqual({ item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a"], part: "lowerbody", color: "#2b3a55", query: "dark straight jeans" });
+    expect(out.items[1].part).toBe("upperbody"); // unknown part falls back
+    expect(out.items[1].color).toBe("#8a7f72");
+  });
+
+  it("analyses a selfie palette and refuses photos without a face", async () => {
+    const out = await (await worker.fetch(call("/api/palette", { image: PNG }), env())).json();
+    expect(upstream[0].prompt).toMatch(/ONLY to choose clothing colours/);
+    expect(out.season).toBe("Мягкая осень");
+    expect(out.best).toEqual([{ name: "Олива", hex: "#6f6b3e" }]); // invalid hex dropped
+    expect(out.metal).toEqual({ name: "Золото", good: ["#c9a24a"], avoid: "" });
+    paletteIsPerson = false;
+    const res = await worker.fetch(call("/api/palette", { image: PNG }), env());
+    expect(res.status).toBe(422);
   });
 
   it("validates images", async () => {
