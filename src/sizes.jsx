@@ -1,14 +1,17 @@
 // «Мерки и размеры» (P3·15 + P3·16): the parametric 3D body and clothing sizes.
 // Unknown measurements are estimated from height and weight and marked «оценка»; anything the
 // user sets with a slider counts as their own measurement and can be reset back to the estimate.
+// «Мерки по фото» (photo-measure.jsx) fills chest, waist, hips, shoulders and inside leg from photos;
+// those are marked «по фото» (body.sources) until the user moves their slider.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { getProfile, saveProfile } from "./lib/settings.js";
 import { CHARTS, MEASURES, fullBody, getBody, saveBody, sizeChart, sizesFor, sizesSummary } from "./lib/sizes.js";
 import { GENDERS, splitList } from "./lib/style-options.js";
 import { Icon } from "./ui.jsx";
 
-// three.js arrives only with this screen.
+// three.js arrives only with this screen; the photo measuring (MediaPipe) only when it is opened.
 const Body3D = lazy(() => import("./body3d.jsx").then((m) => ({ default: m.Body3D })));
+const PhotoMeasure = lazy(() => import("./photo-measure.jsx").then((m) => ({ default: m.PhotoMeasure })));
 
 const num = (text, fallback) => { const n = Number.parseFloat(String(text || "").replace(",", ".")); return Number.isFinite(n) ? n : fallback; };
 
@@ -18,6 +21,8 @@ export function SizesView({ onBack, onToast }) {
   const [height, setHeight] = useState(175);
   const [weight, setWeight] = useState(70);
   const [measured, setMeasured] = useState({});
+  const [sources, setSources] = useState({});
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [focus, setFocus] = useState("chest");
   const [oversize, setOversize] = useState(false);
   const [chart, setChart] = useState("top");
@@ -29,6 +34,7 @@ export function SizesView({ onBack, onToast }) {
       setHeight(Math.round(num(body?.height ?? profile.height, 175)));
       setWeight(Math.round(num(body?.weight ?? profile.weight, 70)));
       setMeasured(body?.measured || {});
+      setSources(body?.sources || {});
       setOversize(splitList(profile.fits).includes("Оверсайз"));
       setReady(true);
     });
@@ -43,11 +49,27 @@ export function SizesView({ onBack, onToast }) {
   const CHART_OF = { top: "top", jeans: "bottom", shirt: "shirt", shoes: "shoes" };
   const openChart = (id) => { setChart(CHART_OF[id] || "top"); chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); };
 
-  const save = async () => {
-    await saveBody(body);
+  const persist = async (next) => {
+    await saveBody(next);
     const profile = await getProfile();
-    await saveProfile({ ...profile, gender, height: `${height} см`, weight: `${weight} кг`, sizes: sizesSummary(body) });
+    await saveProfile({ ...profile, gender: next.gender, height: `${next.height} см`, weight: `${next.weight} кг`, sizes: sizesSummary(next) });
+  };
+  const save = async () => {
+    await persist({ ...body, sources });
     onToast?.("Мерки сохранены — подберу размер в покупках");
+  };
+  const setOwn = (id, value) => {
+    const next = { ...measured };
+    if (value === undefined) delete next[id]; else next[id] = value;
+    setMeasured(next);
+    if (sources[id]) { const rest = { ...sources }; delete rest[id]; setSources(rest); }
+  };
+  const applyPhoto = async ({ height: h, values: found }) => {
+    const nextMeasured = { ...measured, ...found };
+    const nextSources = { ...sources, ...Object.fromEntries(Object.keys(found).map((id) => [id, "photo"])) };
+    setHeight(h); setMeasured(nextMeasured); setSources(nextSources); setPhotoOpen(false);
+    await persist({ gender, height: h, weight, measured: nextMeasured, sources: nextSources });
+    onToast?.("Мерки по фото сохранены — можно поправить ползунками");
   };
 
   if (!ready) return null;
@@ -65,6 +87,12 @@ export function SizesView({ onBack, onToast }) {
         </Suspense>
         <span className="stage__caption">Потяни, чтобы повернуть · подсвечено: {focused?.label.toLowerCase()}</span>
       </div>
+
+      <button type="button" className="photo-cta rise" onClick={() => setPhotoOpen(true)}>
+        <span className="row-card__icon"><Icon name="camera" size={22} /></span>
+        <span><b>Мерки по фото</b><small>Сфотографируйся в полный рост — посчитаю обхваты. Фото не уходит с телефона.</small></span>
+        <Icon name="chevron" size={20} width={2} />
+      </button>
 
       <div className="choice-row sizes__gender" role="radiogroup" aria-label="Фигура">
         {GENDERS.map(([id, label]) => <button type="button" role="radio" key={id || "none"} aria-checked={gender === id} className={`option-pill${gender === id ? " is-on" : ""}`} onClick={() => setGender(id)}>{id ? label : "Нейтральная"}</button>)}
@@ -84,11 +112,13 @@ export function SizesView({ onBack, onToast }) {
             <div key={m.id} className={`measure${focus === m.id ? " is-focus" : ""}`} onPointerDown={() => setFocus(m.id)} onFocus={() => setFocus(m.id)}>
               <label className="field-v2 slider-field">
                 <span>{label} <b>{m.id === "foot" ? values[m.id].toFixed(1) : values[m.id]} см</b></span>
-                <input type="range" min={m.min} max={m.max} step={m.step} value={values[m.id]} onChange={(e) => setMeasured({ ...measured, [m.id]: Number(e.target.value) })} />
+                <input type="range" min={m.min} max={m.max} step={m.step} value={values[m.id]} onChange={(e) => setOwn(m.id, Number(e.target.value))} />
               </label>
               <div className="measure__meta">
-                <span className={`tag tag--small${own ? " tag--own" : ""}`}>{own ? "твоя мерка" : "оценка"}</span>
-                {own && <button type="button" className="text-button" onClick={() => { const next = { ...measured }; delete next[m.id]; setMeasured(next); }}>вернуть оценку</button>}
+                {own && sources[m.id] === "photo"
+                  ? <span className="tag tag--small tag--photo">по фото</span>
+                  : <span className={`tag tag--small${own ? " tag--own" : ""}`}>{own ? "твоя мерка" : "оценка"}</span>}
+                {own && <button type="button" className="text-button" onClick={() => setOwn(m.id, undefined)}>вернуть оценку</button>}
               </div>
               {focus === m.id && <p className="tiny-text measure__how">{m.how}</p>}
             </div>
@@ -129,6 +159,12 @@ export function SizesView({ onBack, onToast }) {
       <p className="tiny-text">{table.note}</p>
 
       <button type="button" className="btn btn--dark btn--block btn--tall" onClick={save}><Icon name="check" size={18} width={2.2} /> Сохранить</button>
+
+      {photoOpen && (
+        <Suspense fallback={null}>
+          <PhotoMeasure gender={gender} height={height} weight={weight} current={values} onClose={() => setPhotoOpen(false)} onSave={applyPhoto} />
+        </Suspense>
+      )}
     </section>
   );
 }

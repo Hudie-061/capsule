@@ -33,7 +33,7 @@ let topicVerdict;
 let paletteIsPerson;
 let serp;
 const SERP = { shopping_results: [
-  { title: "Dark straight jeans", source: "Zalando", product_link: "https://shop.example/a", extracted_price: 49.95, delivery: "Free delivery", thumbnail: "https://img.example/a.jpg" },
+  { title: "Dark straight jeans", source: "Zalando", product_id: "101", product_link: "https://shop.example/a", immersive_product_page_token: "eyJlaSI6InRva2VuLWEifQ==", extracted_price: 49.95, extracted_old_price: 59.95, delivery: "Free delivery", thumbnail: "https://img.example/a.jpg" },
   { title: "Levi's 501 dark", source: "Vinted", product_link: "https://www.vinted.be/items/1", extracted_price: 18, delivery: "+€3,90 delivery" },
   { title: "Straight jeans", source: "Shop C", product_link: "https://shop.example/c", price: "€29,99", delivery: "Delivery by Nov 20" },
   { title: "No price", source: "Shop D", product_link: "https://shop.example/d" },
@@ -321,10 +321,56 @@ describe("price search", () => {
     expect(upstream.some((c) => c.serp)).toBe(false);
   });
 
+  it("keeps the old price and the token for the shop link", async () => {
+    const out = await (await search({ query: "dark straight jeans", country: "be" }, env({ SERPAPI_KEY: "k" }))).json();
+    const zalando = out.offers.find((o) => o.store === "Zalando");
+    expect(zalando).toMatchObject({ id: "101", price: 49.95, oldPrice: 59.95, token: "eyJlaSI6InRva2VuLWEifQ==" });
+    expect(out.offers.find((o) => o.store === "Shop C").oldPrice).toBe(null);
+  });
+
   it("keeps searches inside the shared monthly budget", async () => {
     const e = env({ SERPAPI_KEY: "k", MONTHLY_SEARCH_BUDGET: "1" });
     expect((await search({ query: "white sneakers" }, e)).status).toBe(200);
     expect((await search({ query: "grey hoodie" }, e)).status).toBe(429);
+  });
+});
+
+describe("shop link for an offer", () => {
+  const open = (body, e) => worker.fetch(call("/api/offer", body), e);
+  const STORES = { product_results: { stores: [
+    { name: "Other shop", link: "https://other.example/x", extracted_price: 45 },
+    { name: "Zalando.be", link: "https://www.google.com/url?q=https://www.zalando.be/jeans-101.html&sa=U", extracted_price: 49.95, extracted_original_price: 59.95 },
+  ] } };
+
+  it("returns the product page on the same shop's site, unwrapped from Google", async () => {
+    serp = STORES;
+    const res = await open({ token: "eyJlaSI6InRva2VuLWEifQ==", store: "Zalando" }, env({ SERPAPI_KEY: "SERP-SECRET" }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ link: "https://www.zalando.be/jeans-101.html", store: "Zalando.be", price: 49.95, oldPrice: 59.95 });
+    const serpCall = upstream.find((c) => c.serp);
+    expect(serpCall.url).toContain("engine=google_immersive_product");
+    expect(serpCall.url).toContain("page_token=eyJlaSI6InRva2VuLWEifQ%3D%3D");
+  });
+
+  it("answers a second tap from the cache without a new paid call or counter", async () => {
+    serp = STORES;
+    const e = env({ SERPAPI_KEY: "k" });
+    await open({ token: "eyJlaSI6InRva2VuLWEifQ==", store: "Zalando" }, e);
+    const counters = [...e.USAGE.map.keys()].filter((k) => !k.startsWith("offer:")).map((k) => e.USAGE.map.get(k));
+    const again = await (await open({ token: "eyJlaSI6InRva2VuLWEifQ==", store: "Zalando" }, e)).json();
+    expect(again.cached).toBe(true);
+    expect(upstream.filter((c) => c.serp)).toHaveLength(1);
+    expect([...e.USAGE.map.keys()].filter((k) => !k.startsWith("offer:")).map((k) => e.USAGE.map.get(k))).toEqual(counters);
+  });
+
+  it("does not send a link to another shop, and rejects bad tokens without a paid call", async () => {
+    serp = STORES;
+    const res = await open({ token: "eyJlaSI6InRva2VuLWEifQ==", store: "H&M" }, env({ SERPAPI_KEY: "k" }));
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe("no_link");
+    upstream = [];
+    expect((await open({ token: "<script>", store: "H&M" }, env({ SERPAPI_KEY: "k" }))).status).toBe(400);
+    expect(upstream).toHaveLength(0);
   });
 });
 

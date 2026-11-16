@@ -1,13 +1,17 @@
 // First launch: a short path to a personal app, every step skippable.
 // welcome → access code (only if missing) → who you are → style quiz → first items.
 // Answers go into the same style profile the stylist reads, so they can be changed in «Профиль».
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { kv } from "./lib/db.js";
 import { checkConnection } from "./lib/gemini.js";
 import { getProfile, getSettings, saveProfile, saveSettings } from "./lib/settings.js";
+import { getBody, saveBody } from "./lib/sizes.js";
 import { GarmentIcon, Icon } from "./ui.jsx";
 
 import { AVOID, FITS, GENDERS, PLACES, STYLES } from "./lib/style-options.js";
+
+// MediaPipe and the measuring code load only if the user opens «Мерки по фото».
+const PhotoMeasure = lazy(() => import("./photo-measure.jsx").then((m) => ({ default: m.PhotoMeasure })));
 
 export const isOnboardingDone = async () => Boolean((await kv.get("onboarding", null))?.done);
 const finishOnboarding = () => kv.set("onboarding", { done: true, at: new Date().toISOString() });
@@ -46,6 +50,8 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
   const [fits, setFits] = useState(new Set());
   const [avoid, setAvoid] = useState(new Set());
   const [places, setPlaces] = useState(new Set());
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photoDone, setPhotoDone] = useState(null);
 
   useEffect(() => {
     getProfile().then((p) => {
@@ -81,6 +87,18 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
     await save();
     await finishOnboarding();
     onDone();
+  };
+
+  // measurements from photos go straight into the stored body, like «Мерки и размеры» does
+  const applyPhoto = async ({ height: h, values }) => {
+    const body = (await getBody()) || {};
+    await saveBody({
+      ...body, gender, height: h, weight,
+      measured: { ...(body.measured || {}), ...values },
+      sources: { ...(body.sources || {}), ...Object.fromEntries(Object.keys(values).map((id) => [id, "photo"])) },
+    });
+    setHeight(h); setBodyTouched(true); setPhotoOpen(false);
+    setPhotoDone(values);
   };
 
   const verify = async () => {
@@ -148,6 +166,21 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
                 <input type="range" min="40" max="150" step="1" value={weight} onChange={(e) => { setWeight(Number(e.target.value)); setBodyTouched(true); }} />
               </label>
               <p className="tiny-text">Рост и вес нужны только для пропорций манекена и подсказок по размеру. Хранятся на телефоне.</p>
+              <button type="button" className="photo-cta" onClick={() => setPhotoOpen(true)}>
+                <span className="row-card__icon"><Icon name="camera" size={22} /></span>
+                <span><b>Мерки по фото</b><small>Сфотографируйся в полный рост — посчитаю обхваты и подберу размер. Фото не уходит с телефона.</small></span>
+                <Icon name="chevron" size={20} width={2} />
+              </button>
+              {photoDone && (
+                <p className="status-line status-line--ok">
+                  Мерки по фото сохранены: {[["chest", "грудь"], ["waist", "талия"], ["hips", "бёдра"]].filter(([id]) => photoDone[id]).map(([id, name]) => `${name} ${photoDone[id]}`).join(", ")} см. Поправить можно в «Профиле».
+                </p>
+              )}
+              {photoOpen && (
+                <Suspense fallback={null}>
+                  <PhotoMeasure gender={gender} height={height} weight={weight} onClose={() => setPhotoOpen(false)} onSave={applyPhoto} />
+                </Suspense>
+              )}
             </>
           )}
 

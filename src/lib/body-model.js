@@ -132,6 +132,15 @@ function torsoGirth(pos, triangles, y) {
   return { girth: perimeter(h), hull: h };
 }
 
+// The torso at a height on a fitted body (cm): tape girth, front width (x) and side depth (z).
+// Measuring by photo (photo-measure.js) compares these with the silhouette in the photo.
+export function torsoSection(pos, index, y) {
+  const { girth, hull: h } = torsoGirth(pos, trianglesNear(pos, index, y, 3), y);
+  if (!h.length) return null;
+  const xs = h.map((q) => q[0]); const zs = h.map((q) => q[1]);
+  return { girth, width: Math.max(...xs) - Math.min(...xs), depth: Math.max(...zs) - Math.min(...zs) };
+}
+
 // Lowest point of the crotch: the lowest vertex on the middle line between the legs.
 function crotchOf(pos, n, min, height) {
   let best = null;

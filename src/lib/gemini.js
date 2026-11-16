@@ -99,6 +99,11 @@ export async function pricesTask({ query, country }) {
   return task("prices", { query, country });
 }
 
+// The product page on the shop's own site for one price offer (one search; the Worker caches it for a week).
+export async function offerLinkTask({ token, store }) {
+  return task("offer", { token, store });
+}
+
 export async function paletteTask(selfieBlob) {
   return task("palette", { image: await toPayload(selfieBlob) });
 }

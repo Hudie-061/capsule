@@ -1,7 +1,7 @@
 // Capsule proxy — a Cloudflare Worker that holds the owner's Gemini API key.
 //
 // It is NOT a general Gemini pass-through. It exposes only the wardrobe tasks the
-// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette, prices), builds every prompt
+// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette, prices, offer), builds every prompt
 // itself, pins the models, constrains outputs with JSON schemas, clips all user text,
 // and checks that free text sent to the image model is about clothing. Someone who
 // has an access code still cannot use it as a chatbot or a general image generator.
@@ -373,33 +373,60 @@ function priceRequest(input) {
   return { query, country, currency: COUNTRIES[country] };
 }
 
-async function priceKey(req) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${req.country}|${req.query.toLowerCase()}`));
-  return `prices:v1:${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-}
+const hashKey = async (prefix, value) => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return `${prefix}${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+};
+// v2: offers carry the token for the shop's own link (see `offer`), so v1 answers are not reused.
+const priceKey = (req) => hashKey("prices:v2:", `${req.country}|${req.query.toLowerCase()}`);
 
+// Google Shopping's product token, sent back by the app to get the shop's own link (task `offer`).
+const TOKEN = /^[\w+/=-]{16,4000}$/;
+const money2 = (value) => (typeof value === "number" && value > 0 ? Math.round(value * 100) / 100 : null);
+
+// All offers (about 40), cheapest first. The app picks what to show: popular chains, all new, or second-hand.
 function normalizeOffers(results) {
   const seen = new Set();
   const offers = [];
   for (const r of (Array.isArray(results) ? results : []).slice(0, 60)) {
     const price = typeof r?.extracted_price === "number" ? r.extracted_price : deliveryCost(r?.price);
     const link = httpsUrl(r?.product_link) || httpsUrl(r?.link);
-    if (!price || price <= 0 || !link || seen.has(link)) continue;
-    seen.add(link);
-    const store = text(r.source, 60) || "Магазин";
-    const title = text(r.title, 140);
+    const store = text(r?.source, 60) || "Магазин";
+    const title = text(r?.title, 140);
+    const id = text(r?.product_id, 40) || `${store}|${title}`.toLowerCase();
+    if (!price || price <= 0 || (!link && !r?.immersive_product_page_token) || seen.has(id)) continue;
+    seen.add(id);
     const delivery = r.delivery ? deliveryCost(r.delivery) : null;
     const used = Boolean(r.second_hand_condition) || USED_SOURCES.test(store) || USED_WORDS.test(title);
+    const oldPrice = money2(r.extracted_old_price);
     offers.push({
-      title, store, link, image: httpsUrl(r.thumbnail),
+      id, title, store, link, image: httpsUrl(r.thumbnail),
+      token: typeof r.immersive_product_page_token === "string" && TOKEN.test(r.immersive_product_page_token) ? r.immersive_product_page_token : "",
       price: Math.round(price * 100) / 100,
+      oldPrice: oldPrice && oldPrice > price ? oldPrice : null,
       delivery, total: Math.round((price + (delivery || 0)) * 100) / 100,
       condition: used ? "used" : "new",
       rating: typeof r.rating === "number" ? r.rating : null,
     });
   }
-  return offers.sort((a, b) => a.total - b.total).slice(0, 12);
+  return offers.sort((a, b) => a.total - b.total).slice(0, 40);
 }
+
+// "https://www.google.com/url?q=https://shop…" → "https://shop…"
+function shopUrl(value) {
+  const link = httpsUrl(value);
+  if (!link) return "";
+  try {
+    const url = new URL(link);
+    if (/(^|\.)google\.[a-z.]+$/i.test(url.hostname) && url.pathname === "/url") return httpsUrl(url.searchParams.get("q") || url.searchParams.get("url"));
+    return /(^|\.)google\.[a-z.]+$/i.test(url.hostname) ? "" : link;
+  } catch { return ""; }
+}
+const sameStore = (a, b) => {
+  const s = (v) => String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const x = s(a); const y = s(b);
+  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+};
 
 // The search key is paid per query, so only clothing searches go through.
 async function requireClothingQuery(env, query) {
@@ -579,6 +606,38 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
       const result = { query: req.query, country: req.country, currency: req.currency, offers: normalizeOffers(data.shopping_results), at: new Date().toISOString() };
       try { await env.USAGE.put(await priceKey(req), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 }); }
       catch (error) { console.error("capsule-proxy: price cache not saved", error?.message || error); }
+      return result;
+    },
+  },
+
+  // The shop's own page for one offer. Google Shopping links open Google's product popup, which is often
+  // empty outside Google ("Details aren't available"), so when the person taps an offer the app sends its
+  // token here and gets the link to the product on the shop's site. One search; cached for a week.
+  offer: {
+    kind: "search",
+    async peek(env, input) {
+      if (typeof input?.token !== "string" || !TOKEN.test(input.token)) return null;
+      try {
+        const cached = await env.USAGE.get(await hashKey("offer:v1:", `${input.token}|${text(input.store, 60)}`));
+        return cached ? { ...JSON.parse(cached), cached: true } : null;
+      } catch { return null; }
+    },
+    async run(env, input) {
+      if (!env.SERPAPI_KEY) throw new TaskError(503, "Поиск цен ещё не подключён — владелец добавит ключ.", "prices_not_configured");
+      const token = typeof input?.token === "string" && TOKEN.test(input.token) ? input.token : "";
+      if (!token) throw new TaskError(400, "token is required");
+      const store = text(input.store, 60);
+      const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
+      url.search = new URLSearchParams({ engine: "google_immersive_product", page_token: token, api_key: env.SERPAPI_KEY }).toString();
+      const response = await fetch(url.toString());
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) throw new TaskError(502, `Магазин не ответил${data.error ? `: ${text(data.error, 120)}` : ""}. Попробуй позже.`);
+      const stores = (Array.isArray(data.product_results?.stores) ? data.product_results.stores : []).filter((s) => shopUrl(s?.link));
+      const pick = stores.find((s) => sameStore(s.name, store)) || (store ? null : stores[0]);
+      if (!pick) throw new TaskError(404, "Магазин не дал прямую ссылку на эту вещь.", "no_link");
+      const result = { link: shopUrl(pick.link), store: text(pick.name, 60), price: money2(pick.extracted_price), oldPrice: money2(pick.extracted_original_price) };
+      try { await env.USAGE.put(await hashKey("offer:v1:", `${token}|${store}`), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 }); }
+      catch (error) { console.error("capsule-proxy: offer link not saved", error?.message || error); }
       return result;
     },
   },

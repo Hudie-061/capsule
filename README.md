@@ -129,4 +129,5 @@ npm test                 # тесты прокси и обработки кар�
 - Vite обновлён с 6.4.3 (`npm audit`: high) до 6.4.6.
 - 3D-фигура на экране «Мерки и размеры» — библиотека **three.js** (MIT), загружается только на этом экране.
 - Модель тела для 3D-фигуры — базовая сетка и формы **MakeHuman** (CC0 1.0), файл `src/assets/mh-body.bin` (~0,8 МБ), собран скриптом `scripts/makehuman-to-bin.py`; тоже грузится только на экране мерок.
+- «Мерки по фото» — **MediaPipe Pose Landmarker** от Google: библиотека `@mediapipe/tasks-vision` 1.2.0 (Apache-2.0, в сборку идёт только `vision_wasm_internal.js/.wasm`, ~14,5 МБ) и модель `src/assets/pose_landmarker_full.task` (Apache-2.0, ~9,4 МБ, см. `src/assets/MEDIAPIPE-LICENSE.md`). Работает на телефоне, фото никуда не отправляется; грузится только на экране «Мерки по фото».
 - Дизайн v2: экраны `src/today.jsx`, `src/shopping.jsx`, `src/palette.jsx`, `src/timing.jsx`, общие элементы `src/ui.jsx`, стили `src/v2.css`, данные дня `src/lib/daily.js`. Шрифт Instrument Sans убран: заголовки — Georgia / Noto Serif (в Instrument Serif нет кириллицы), текст — Inter.

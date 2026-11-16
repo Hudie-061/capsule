@@ -79,7 +79,7 @@ function YouCard({ profile, body, onOpen }) {
       <span className="you-card__text">
         <span className="you-card__label">Ты</span>
         <span className="strong-text">{facts || "Пол, рост и мерки"}</span>
-        <span className="tiny-text">{sizes ? `Размеры: ${sizes}` : "Добавь мерки — подберу размер и покажу 3D-фигуру"}</span>
+        <span className="tiny-text">{sizes ? `Размеры: ${sizes}` : "Мерки по фото или вручную — подберу размер и покажу 3D-фигуру"}</span>
       </span>
       <Icon name="chevron" size={20} width={2} />
     </button>

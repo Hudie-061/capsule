@@ -1,25 +1,30 @@
 // «Покупки» (design/V2-Shopping.dc.html) — the owner's main bet: dress well and save money.
 // 1. What the capsule is missing comes from the `gaps` task, with "+N образов" counted on the device.
 // 2. For the selected piece the `prices` task finds offers in the chosen country (Google Shopping via
-//    SerpApi), sorted by price with delivery, with a "best price" badge. Until the owner adds the
-//    search key, the screen honestly falls back to search links in that country's shops.
+//    SerpApi), sorted by price with delivery, with a "best price" badge. «Популярные» (default) keeps
+//    only mass-market chains (src/lib/chains.js), at most 2 per chain and 10 in all. Tapping an offer
+//    asks the `offer` task for the product page on the shop's own site (Google's own product links
+//    often open empty); without it the link goes to the chain's search for that product.
+//    Each chain also gets a free search link on its own site. Until the owner adds the search key,
+//    the screen honestly falls back to those links.
 // 3. «Купил здесь» records a purchase; the saving vs the most expensive offer adds up for the month.
 // 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
 //    profile's height and weight) is added to the search; the chip turns it off.
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { chainLinks, chainOffers, offerFallback, queryGender } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
 import { kindOf } from "./lib/kinds.js";
 import { bodyOrProfile, getBody, sizeForKind } from "./lib/sizes.js";
 import { splitList } from "./lib/style-options.js";
-import { SetupError, pricesTask } from "./lib/gemini.js";
+import { SetupError, offerLinkTask, pricesTask } from "./lib/gemini.js";
 import { plural } from "./lib/plural.js";
 import { addPurchase, getFeedback, getLearned, getProfile, getPurchases, getSettings, saveSettings } from "./lib/settings.js";
 import { findGaps } from "./lib/stylist.js";
 import { GarmentIcon, Icon, Sheet, Spinner, isDressItem } from "./ui.jsx";
 
-const FILTERS = [{ id: "all", label: "Все" }, { id: "new", label: "Новые" }, { id: "used", label: "Б/у" }];
+const FILTERS = [{ id: "chains", label: "Популярные" }, { id: "new", label: "Все новые" }, { id: "used", label: "Б/у" }];
 const PRIORITY = { high: "в первую очередь", medium: "желательно", low: "по желанию" };
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -44,17 +49,21 @@ function impact(gap, items) {
   return `+${n} ${plural(n, ["образ", "образа", "образов"])}`;
 }
 
+const idOf = (offer) => offer.id || offer.link;
+const discount = (offer) => (offer.oldPrice > offer.price ? Math.round((1 - offer.price / offer.oldPrice) * 100) : 0);
+
 const deliveryText = (offer, currency) => (offer.delivery === 0 ? "Бесплатная доставка" : offer.delivery ? `+${money(offer.delivery, currency)} доставка` : "Доставка уточняется на сайте");
 
 // Offers are kept on the device for a day, so going back and forth costs nothing.
-const offersKey = (country, query) => `offers:${country}:${query.toLowerCase()}`;
+// v2: offers carry the token for the shop's own link, so older saved answers are not reused.
+const offersKey = (country, query) => `offers2:${country}:${query.toLowerCase()}`;
 
 export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAccess, onOpenSizes }) {
   const [cache, setCache] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState(0);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("chains");
   const [country, setCountry] = useState(null);
   const [countryOpen, setCountryOpen] = useState(false);
   const [offers, setOffers] = useState({ status: "idle", data: null, error: "" });
@@ -63,6 +72,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [bought, setBought] = useState("");
   const [fit, setFit] = useState({ body: null, oversize: false });
   const [sizeOn, setSizeOn] = useState(true);
+  const [direct, setDirect] = useState({}); // offer id → the product page on the shop's site
+  const [opening, setOpening] = useState("");
+  const [blocked, setBlocked] = useState("");
 
   useEffect(() => {
     getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); });
@@ -108,6 +120,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const shownQuery = size && sizeOn ? `${baseQuery} ${size.shown}` : baseQuery; // to the user and shop links
   const place = countryById(country);
   const currency = offers.data?.currency || place.currency;
+  const gender = queryGender(baseQuery, fit.body?.gender);
 
   // Offers for the selected piece in the selected country.
   useEffect(() => {
@@ -134,7 +147,10 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     return () => { alive = false; };
   }, [query, country, setupReady, pricesOff]);
 
-  const list = useMemo(() => (offers.data?.offers || []).filter((o) => filter === "all" || o.condition === filter), [offers.data, filter]);
+  const list = useMemo(() => {
+    const all = offers.data?.offers || [];
+    return filter === "chains" ? chainOffers(all) : all.filter((o) => o.condition === filter).slice(0, 12);
+  }, [offers.data, filter]);
   const maxTotal = list.length ? Math.max(...list.map((o) => o.total)) : 0;
   const best = list[0];
   const bestSaving = best ? Math.round(maxTotal - best.total) : 0;
@@ -146,9 +162,29 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const markBought = async (offer) => {
     const all = offers.data?.offers || [];
     const top = all.length ? Math.max(...all.map((o) => o.total)) : offer.total;
-    const next = await addPurchase({ title: offer.title, store: offer.store, link: offer.link, total: offer.total, maxTotal: top, saving: Math.max(0, Math.round((top - offer.total) * 100) / 100), currency, gap: gap?.item || "" });
+    const next = await addPurchase({ title: offer.title, store: offer.store, link: direct[idOf(offer)] || "", total: offer.total, maxTotal: top, saving: Math.max(0, Math.round((top - offer.total) * 100) / 100), currency, gap: gap?.item || "" });
     setPurchases([...next]);
-    setBought(offer.link);
+    setBought(idOf(offer));
+  };
+
+  // The first tap asks the Worker for the shop's own product page (one search, cached for a week),
+  // then opens it. If the browser blocks a tab opened after the wait, the card's link already points
+  // there, so a second tap opens it.
+  const openOffer = async (event, offer) => {
+    const id = idOf(offer);
+    if (direct[id] || !offer.token) return; // the link itself goes to the shop
+    event.preventDefault();
+    if (opening) return;
+    setOpening(id);
+    setBlocked("");
+    let link = "";
+    try { link = (await offerLinkTask({ token: offer.token, store: offer.store })).link || ""; } catch { /* the chain's search instead */ }
+    const target = link || offerFallback(offer, country || "be", gender);
+    setDirect((d) => ({ ...d, [id]: target }));
+    setOpening("");
+    const tab = window.open(target, "_blank");
+    if (!tab) { setBlocked(id); return; }
+    try { tab.opener = null; } catch { /* already another site */ }
   };
 
   const toggleSize = async () => {
@@ -164,7 +200,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     await saveSettings({ country: id });
   };
 
-  const links = storeLinks(country || "be").filter((s) => filter === "all" || s.cond === filter);
+  // Free links: search on the chains' own sites (or second-hand sites for «Б/у»), plus Google Shopping.
+  const linkCountry = country || "be";
+  const links = filter === "used"
+    ? storeLinks(linkCountry).filter((s) => s.cond === "used").map((s) => ({ ...s, href: s.url(shownQuery) }))
+    : [
+      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender }).map((c) => ({ ...c, cond: "new", href: c.url, note: c.own ? "Поиск прямо на сайте магазина" : "Поиск Google по сайту магазина" })),
+      ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery) })),
+    ];
 
   return (
     <section className="screen shopping">
@@ -246,37 +289,54 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           {offers.status === "done" && (
             list.length ? (
               <div className="offer-list" key={`${query}-${filter}-${country}`}>
-                {list.map((o, i) => (
-                  <div key={o.link} className={`offer rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.05}s` }}>
-                    <a className="offer__main" href={o.link} target="_blank" rel="noopener noreferrer">
-                      <span className="offer__icon">{o.image ? <img src={o.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <GarmentIcon item={gap} size={38} />}</span>
-                      <span className="offer__text">
-                        <span className="offer__title"><span className="strong-text">{o.store}</span><span className="tag tag--small">{o.condition === "used" ? "Б/у" : "Новое"}</span></span>
-                        <span className="offer__name">{o.title}</span>
-                        <span className="tiny-text">{deliveryText(o, currency)}</span>
-                      </span>
-                      <span className="offer__price">
-                        <span className="offer__total">{money(o.total, currency)}</span>
-                        {i === 0 && bestSaving > 0 && <span className="badge-best">Лучшая · −{money(bestSaving, currency)}</span>}
-                      </span>
-                    </a>
-                    <button type="button" className={`offer__bought${bought === o.link ? " is-on" : ""}`} onClick={() => markBought(o)} disabled={bought === o.link}>
-                      {bought === o.link ? <><Icon name="check" size={14} width={2.4} /> Отмечено</> : "Купил здесь"}
-                    </button>
-                  </div>
-                ))}
+                {list.map((o, i) => {
+                  const id = idOf(o);
+                  const off = discount(o);
+                  return (
+                    <div key={id} className={`offer rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.05}s` }}>
+                      <a className="offer__main" href={direct[id] || offerFallback(o, linkCountry, gender)} target="_blank" rel="noopener noreferrer" onClick={(e) => openOffer(e, o)} aria-busy={opening === id}>
+                        <span className="offer__icon">{o.image ? <img src={o.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <GarmentIcon item={gap} size={38} />}</span>
+                        <span className="offer__text">
+                          <span className="offer__title">
+                            <span className="strong-text">{o.store}</span>
+                            <span className="tag tag--small">{o.condition === "used" ? "Б/у" : "Новое"}</span>
+                            {off > 0 && <span className="tag tag--small tag--sale">−{off}%</span>}
+                          </span>
+                          <span className="offer__name">{o.title}</span>
+                          <span className={`tiny-text${blocked === id ? " offer__hint" : ""}`}>
+                            {opening === id ? "Открываю сайт магазина…" : blocked === id ? "Ссылка готова — нажми ещё раз" : deliveryText(o, currency)}
+                          </span>
+                        </span>
+                        <span className="offer__price">
+                          {opening === id ? <Spinner label="Открываю" /> : <span className="offer__total">{money(o.total, currency)}</span>}
+                          {off > 0 && opening !== id && <span className="offer__old">{money(o.oldPrice, currency)}</span>}
+                          {i === 0 && bestSaving > 0 && <span className="badge-best">Лучшая · −{money(bestSaving, currency)}</span>}
+                        </span>
+                      </a>
+                      <button type="button" className={`offer__bought${bought === id ? " is-on" : ""}`} onClick={() => markBought(o)} disabled={bought === id}>
+                        {bought === id ? <><Icon name="check" size={14} width={2.4} /> Отмечено</> : "Купил здесь"}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
-            ) : <p className="muted-text">{filter === "all" ? "Ничего не нашлось. Попробуй другую вещь или страну." : "В этом фильтре пусто — посмотри «Все»."}</p>
+            ) : (
+              <p className="muted-text">
+                {filter === "chains"
+                  ? (offers.data?.offers || []).length ? "В Google Покупках нет этой вещи из популярных магазинов. Поищи прямо у них или посмотри «Все новые»." : "В Google Покупках ничего не нашлось — поищи прямо на сайтах магазинов."
+                  : filter === "new" ? "Новых предложений нет — посмотри «Б/у» или сайты магазинов." : "Б/у предложений нет — поищи на сайтах ниже."}
+              </p>
+            )
           )}
 
           {offers.status === "error" && <p className="error-text">{offers.error}</p>}
 
           {(offers.status === "off" || offers.status === "error" || offers.status === "done") && (
             <>
-              {offers.status !== "done" && (
+              {(offers.status !== "done" || !list.length) && (
                 <div className="offer-list">
                   {links.map((s, i) => (
-                    <a key={s.id} className={`offer offer--link rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.url(shownQuery)} target="_blank" rel="noopener noreferrer">
+                    <a key={s.id} className={`offer offer--link rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
                       <span className="offer__icon"><GarmentIcon item={gap} size={38} /></span>
                       <span className="offer__text">
                         <span className="offer__title"><span className="strong-text">{s.name}</span><span className="tag tag--small">{s.cond === "new" ? "Новое" : "Б/у"}</span></span>
@@ -287,14 +347,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                   ))}
                 </div>
               )}
-              {offers.status === "done" && links.length > 0 && (
+              {offers.status === "done" && list.length > 0 && links.length > 0 && (
                 <div className="more-links">
-                  <span className="tiny-text">Поискать ещё:</span>
-                  {links.map((s) => <a key={s.id} className="filter-pill" href={s.url(shownQuery)} target="_blank" rel="noopener noreferrer">{s.name}</a>)}
+                  <span className="tiny-text">{filter === "used" ? "Поискать ещё:" : "Искать на сайтах:"}</span>
+                  {links.map((s) => <a key={s.id} className="filter-pill" href={s.href} target="_blank" rel="noopener noreferrer">{s.name}</a>)}
                 </div>
               )}
               <p className="tiny-text center-text">
-                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${shownQuery}» · ${place.name}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
+                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · до 2 вещей из магазина" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
               </p>
             </>
           )}
