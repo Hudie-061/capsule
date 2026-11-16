@@ -1,19 +1,19 @@
+// Adding clothes («＋»): one decision per photo.
+// 1. The photo is analysed; every item found is shown on «Нашёл N вещей — какие добавить?».
+// 2. Picked items are cut out and land in the wardrobe on their own, with no further reviews.
+//    Items the user does not pick (or a photo they never decide on) are not added.
+// 3. Only a failed background cleanup asks for help.
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { ArrowCounterClockwise, Check, Plus, SpinnerGap, Trash, UploadSimple, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Check, UploadSimple, WarningCircle } from "@phosphor-icons/react";
 import "./import-flow.css";
 import { localFetch } from "./lib/local-api.js";
 import { plural } from "./lib/plural.js";
+import { Icon, Sheet, Spinner } from "./ui.jsx";
 
 const API = "/api/import/jobs";
 const CONFIG_API = "/api/import/config";
-const PARTS = [
-  ["upperbody", "Верх"],
-  ["wholebody_up", "Верхняя одежда"],
-  ["lowerbody", "Низ"],
-  ["accessories_up", "Аксессуары"],
-  ["shoes", "Обувь"],
-];
-const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const PART_LABEL = { upperbody: "Верх", wholebody_up: "Верхняя одежда", lowerbody: "Низ", accessories_up: "Аксессуар", shoes: "Обувь" };
+const ITEMS = ["вещь", "вещи", "вещей"];
 
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -28,86 +28,26 @@ async function api(path, options) {
     headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
   });
   const value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(value.error || "Не удалось обновить импорт.");
+  if (!response.ok) {
+    const error = new Error(value.error || "Не удалось обновить импорт.");
+    error.status = response.status;
+    throw error;
+  }
   return value;
 }
 
-function deriveStatus(job) {
-  const crop = job.stages?.crop;
-  const garment = job.stages?.garment;
-  const modeled = job.stages?.modeled;
-  if (job.error || crop?.status === "failed" || garment?.status === "failed" || modeled?.status === "failed") return { tone: "error", text: "Импорт требует внимания", detail: crop?.error || garment?.error || modeled?.error || job.error };
-  if (modeled?.status === "review") return { tone: "ready", text: "Фото на тебе готово к проверке" };
-  if (modeled?.status === "processing") return { tone: "processing", text: "Генерирую фото на тебе" };
-  if (garment?.status === "review") return { tone: "ready", text: "Готово к проверке" };
-  if (garment?.status === "approved") return { tone: "processing", text: "Создаю фото на тебе" };
-  if (crop?.status === "review") return { tone: "ready", text: "Кадр готов к проверке" };
-  if (crop?.status === "approved") return { tone: "processing", text: "Вырезаю вещь" };
-  if (crop?.status === "rejected" || garment?.status === "rejected" || modeled?.status === "rejected") return { tone: "complete", text: "Импорт отменён" };
-  return { tone: "processing", text: "Ищу одежду на фото" };
+// select: waiting for «добавить?» · working: being cut out · done: in the wardrobe · attention: needs help
+function phaseOf(job) {
+  if (job.libraryRecord) return "done";
+  if (job.stages?.crop?.status === "review" && !job.auto) return "select";
+  if (job.error || ["crop", "garment"].some((s) => job.stages?.[s]?.status === "failed")) return "attention";
+  return "working";
 }
 
-function reviewStageFor(job) {
-  if (job.stages?.modeled?.status === "review") return "modeled";
-  if (job.stages?.garment?.status === "review") return "garment";
-  if (job.stages?.crop?.status === "review") return "crop";
-  return null;
-}
-
-function hasCleanupFailure(job) {
-  return job.stages?.garment?.status === "failed" && Boolean(job.stages?.garment?.failedAssetUrl);
-}
-
-function defaultDraft(job) {
-  const metadata = job.metadata || {};
-  return {
-    name: metadata.name || "Новая вещь",
-    part: metadata.part || "upperbody",
-    color: metadata.color || "#d8d0c2",
-    secondaryColor: metadata.secondaryColor || "",
-    tags: Array.isArray(metadata.tags) ? metadata.tags.join(", ") : (metadata.tags || ""),
-    brand: metadata.brand || "",
-  };
-}
-
-function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt, busy, onAction }) {
-  const asset = job.stages[stage]?.assetUrl;
-  const isCrop = stage === "crop";
-  const isGarment = stage === "garment";
-  const primaryValid = HEX_COLOR.test(draft.color);
-  const secondaryValid = !draft.secondaryColor || HEX_COLOR.test(draft.secondaryColor);
-  return (
-    <div className="import-editor">
-      <img className="import-editor__preview" src={asset} alt={isCrop ? "Найденная вещь" : isGarment ? "Вырезанная вещь" : "Фото на тебе"} />
-      <div className="import-fields">
-        <p className="import-editor__stage">{isCrop ? "Найденная вещь" : isGarment ? "Вещь без фона" : "Фото на тебе"}</p>
-        {isCrop ? <p className="import-card__detail">Проверь, что вещь в кадре целиком. После подтверждения Gemini сделает чистую картинку без фона.</p> : isGarment ? (
-          <>
-            <div className="import-field"><label htmlFor={`name-${job.id}`}>Название</label><input id={`name-${job.id}`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
-            <div className="import-field"><label htmlFor={`brand-${job.id}`}>Бренд <span>необязательно</span></label><input id={`brand-${job.id}`} value={draft.brand || ""} maxLength={40} placeholder="Например: Uniqlo" onChange={(event) => setDraft({ ...draft, brand: event.target.value })} /></div>
-            <div className="import-field"><label htmlFor={`part-${job.id}`}>Категория</label><select id={`part-${job.id}`} value={draft.part} onChange={(event) => setDraft({ ...draft, part: event.target.value })}>{PARTS.map(([id, label]) => <option value={id} key={id}>{label}</option>)}</select></div>
-            <div className="import-field"><label htmlFor={`primary-${job.id}`}>Основной цвет</label><div className="import-color-row"><input id={`primary-${job.id}`} type="color" value={primaryValid ? draft.color : "#000000"} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /><input aria-label="Основной цвет, hex" aria-invalid={!primaryValid} value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></div>{!primaryValid && <small className="import-field-error">Нужен цвет в формате #d8d0c2.</small>}</div>
-            <div className="import-field"><label htmlFor={`secondary-${job.id}`}>Второй цвет <span>необязательно</span></label><input id={`secondary-${job.id}`} type="text" aria-invalid={!secondaryValid} placeholder="#hex или оставь пустым" value={draft.secondaryColor} onChange={(event) => setDraft({ ...draft, secondaryColor: event.target.value })} />{!secondaryValid && <small className="import-field-error">Нужен цвет в формате #d8d0c2 или пусто.</small>}</div>
-            <div className="import-field"><label htmlFor={`tags-${job.id}`}>Детали</label><input id={`tags-${job.id}`} value={draft.tags} placeholder="оверсайз, хлопок, варёный" onChange={(event) => setDraft({ ...draft, tags: event.target.value })} /></div>
-          </>
-        ) : <p className="import-card__detail">Подтверди фото, чтобы прикрепить его к вещи, или перегенерируй с уточнением.</p>}
-        {!isCrop && <div className="import-field import-regenerate-field">
-          <label htmlFor={`regenerate-${job.id}-${stage}`}>Что поправить <span>необязательно</span></label>
-          <textarea id={`regenerate-${job.id}-${stage}`} rows="3" value={regenPrompt} onChange={(event) => setRegenPrompt(event.target.value)} placeholder={isGarment ? "Например: сохрани молнию и убери бирку" : "Например: вечерняя улица, вещь видна целиком"} />
-        </div>}
-        <div className="import-actions">
-          <button className="import-button" disabled={busy} onClick={() => onAction("reject")}><Trash size={14} /> Отклонить</button>
-          {!isCrop && <button className="import-button" disabled={busy} onClick={() => onAction("regenerate", regenPrompt)}><ArrowCounterClockwise size={14} /> Ещё раз</button>}
-          <button className="import-button import-button--primary" disabled={busy || (isGarment && (!draft.name.trim() || !primaryValid || !secondaryValid))} onClick={() => onAction("approve")}><Check size={14} weight="bold" /> {isCrop ? "Подходит" : "Подтвердить"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
+const thumbOf = (job) => job.libraryRecord?.thumbnail || job.stages?.garment?.assetUrl || job.stages?.crop?.assetUrl || job.originalAssetUrl;
 
 function CleanupEditor({ job, tolerance, setTolerance, busy, onPreview, onAccept }) {
   const stage = job.stages.garment;
-  const contaminated = stage.cleanupDiagnostics?.contaminatedPixels;
   const previewTimer = useRef(null);
   useEffect(() => () => clearTimeout(previewTimer.current), []);
   const updateTolerance = (next) => {
@@ -117,103 +57,107 @@ function CleanupEditor({ job, tolerance, setTolerance, busy, onPreview, onAccept
   };
   return (
     <div className="import-cleanup-editor">
-      <p className="import-editor__stage">Ручная чистка фона</p>
-      <p className="import-card__detail">Сгенерированная вещь сохранена. Подстрой чистку фона вручную — это бесплатно и не тратит лимит.</p>
+      <p className="tiny-text">ИИ вырезал вещь, но фон убрался не до конца. Подвинь ползунок, пока на превью не станет чисто — это бесплатно.</p>
       <div className="import-cleanup-comparison">
         <figure><img src={stage.failedAssetUrl} alt="Вещь на цветном фоне" /><figcaption>Исходник</figcaption></figure>
-        <figure><img src={stage.cleanupPreviewUrl || stage.failedAssetUrl} alt="Превью чистки" /><figcaption>{stage.cleanupPreviewUrl ? "Превью чистки" : "Здесь появится превью"}</figcaption></figure>
+        <figure><img src={stage.cleanupPreviewUrl || stage.failedAssetUrl} alt="Превью чистки" /><figcaption>{stage.cleanupPreviewUrl ? "Превью" : "Здесь появится превью"}</figcaption></figure>
       </div>
       <div className="import-field import-cleanup-strength">
         <label htmlFor={`cleanup-${job.id}`}>Сила чистки <strong>{tolerance}</strong></label>
         <input id={`cleanup-${job.id}`} type="range" min="18" max="110" step="2" value={tolerance} onChange={(event) => updateTolerance(Number(event.target.value))} />
         <div className="import-cleanup-scale"><span>Бережнее к краям</span><span>Сильнее убрать фон</span></div>
       </div>
-      {Number.isFinite(contaminated) && <p className="import-card__detail">Проверка видит {contaminated.toLocaleString()} цветных пикселей по краям. Если на превью чисто, можно смело использовать.</p>}
-      <div className="import-actions">
-        <button className="import-button" disabled={busy} onClick={() => onPreview(tolerance)}><ArrowCounterClockwise size={14} /> Показать превью</button>
-        <button className="import-button import-button--primary" disabled={busy} onClick={onAccept}><Check size={14} weight="bold" /> Использовать</button>
+      <div className="row-gap">
+        <button type="button" className="btn btn--dark btn--small" disabled={busy} onClick={onAccept}><Check size={16} weight="bold" /> Добавить так</button>
       </div>
     </div>
   );
 }
 
-// The «＋» button in the bottom menu calls ref.pick(). The tray above the menu shows progress.
-export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGarmentApproved, onModeledApproved, onOpenAccess }, ref) {
+export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGarmentApproved, onOpenAccess, onOpenItem }, ref) {
   const inputRef = useRef(null);
   const [jobs, setJobs] = useState([]);
-  const [drafts, setDrafts] = useState({});
-  const [regenerationPrompts, setRegenerationPrompts] = useState({});
-  const [cleanupTolerances, setCleanupTolerances] = useState({});
-  const [dragging, setDragging] = useState(false);
+  const [picked, setPicked] = useState(new Set());
+  const [detecting, setDetecting] = useState([]); // photos being analysed: [{ id, preview }]
   const [open, setOpen] = useState(false);
-  const [selectedReviewId, setSelectedReviewId] = useState(null);
-  const [busyId, setBusyId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState(null);
+  const [notice, setNotice] = useState("");
   const [setup, setSetup] = useState(null);
-  const jobsRef = useRef(jobs);
-  jobsRef.current = jobs;
+  const [helpId, setHelpId] = useState(null);
+  const [tolerances, setTolerances] = useState({});
+  const announced = useRef(new Map());
 
   useEffect(() => {
     const loadSetup = () => api(CONFIG_API).then(setSetup).catch((requestError) => setSetup({ ready: false, error: requestError.message }));
     loadSetup();
     window.addEventListener("capsule:settings", loadSetup);
-    api(API)
-      .then((storedJobs) => {
-        const visibleJobs = storedJobs.filter((job) => job.status !== "complete" && job.stages?.crop?.status !== "rejected" && job.stages?.garment?.status !== "rejected" && job.stages?.modeled?.status !== "rejected");
-        setJobs(visibleJobs);
-        setDrafts(Object.fromEntries(visibleJobs.map((job) => [job.id, defaultDraft(job)])));
-      })
-      .catch(() => {});
+    // Items finished in the background last time are handed to the wardrobe and cleared quietly.
+    api(API).then((list) => {
+      const finished = list.filter((job) => phaseOf(job) === "done");
+      finished.forEach((job) => {
+        announced.current.set(job.id, "cleared");
+        onGarmentApproved?.(job.libraryRecord);
+        api(`${API}/${job.id}`, { method: "DELETE" }).catch(() => {});
+      });
+      setJobs(list.filter((job) => phaseOf(job) !== "done"));
+    }).catch(() => {});
     return () => window.removeEventListener("capsule:settings", loadSetup);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Every item that reached the wardrobe is handed to the app once (and again if its photo changes).
+  useEffect(() => {
+    for (const job of jobs) {
+      const record = job.libraryRecord;
+      if (!record) continue;
+      const signature = `${record.image}|${record.modeledImage || ""}`;
+      if (announced.current.get(job.id) === signature) continue;
+      announced.current.set(job.id, signature);
+      onGarmentApproved?.(record);
+    }
+  }, [jobs, onGarmentApproved]);
 
   const refresh = useCallback(async (id) => {
     try {
       const next = await api(`${API}/${id}`);
-      setJobs((current) => current.map((job) => job.id === id ? next : job));
-      setDrafts((current) => current[id] ? current : { ...current, [id]: defaultDraft(next) });
-    } catch (requestError) { setError(requestError.message); }
+      setJobs((current) => current.map((job) => (job.id === id ? next : job)));
+    } catch (requestError) {
+      if (requestError.status === 404) setJobs((current) => current.filter((job) => job.id !== id));
+    }
   }, []);
 
+  const workingIds = jobs.filter((job) => phaseOf(job) === "working" || ["queued", "processing"].includes(job.stages?.modeled?.status)).map((job) => job.id).join(",");
   useEffect(() => {
-    if (!jobs.some((job) => (job.stages?.crop?.status === "approved" && ["processing", "pending", "queued"].includes(job.stages?.garment?.status)) || ["processing", "queued"].includes(job.stages?.modeled?.status) || (job.stages?.garment?.status === "approved" && job.stages?.modeled?.status === "pending"))) return undefined;
-    const timer = setInterval(() => jobs.forEach((job) => refresh(job.id)), 900);
+    if (!workingIds) return undefined;
+    const timer = setInterval(() => workingIds.split(",").forEach((id) => refresh(id)), 1200);
     return () => clearInterval(timer);
-  }, [jobs, refresh]);
+  }, [workingIds, refresh]);
 
   const submitFiles = useCallback(async (files) => {
     if (!setup?.ready) { setOpen(true); return; }
     const images = [...files].filter((file) => file.type.startsWith("image/"));
     if (!images.length) return;
-    setDragging(false); setError(""); setNotice(null);
+    setDragging(false); setError(""); setNotice(""); setOpen(true);
     for (const file of images) {
+      const temp = { id: `${Date.now()}-${Math.random()}`, preview: URL.createObjectURL(file) };
+      setDetecting((current) => [...current, temp]);
       try {
         const imageDataUrl = await fileToDataUrl(file);
         const result = await api(API, { method: "POST", body: JSON.stringify({ imageDataUrl, metadata: { name: file.name.replace(/\.[^.]+$/, "") } }) });
-        const createdJobs = result.jobs || [result];
-        if (!createdJobs.length && result.noClothingDetected) {
-          setNotice({ tone: "complete", text: "Одежда не найдена", detail: `На фото ${file.name} не нашлось отдельной вещи. Попробуй снять чётче и ближе.` });
-          setOpen(true);
-          continue;
-        }
-        setJobs((current) => [...current, ...createdJobs]);
-        setOpen(true);
-        setDrafts((current) => ({ ...current, ...Object.fromEntries(createdJobs.map((job) => [job.id, defaultDraft(job)])) }));
-      } catch (requestError) { setError(requestError.message); }
+        const created = result.jobs || [];
+        if (!created.length) setNotice("На фото не нашлось одежды. Попробуй снять вещь целиком и поближе.");
+        setJobs((current) => [...current, ...created]);
+        setPicked((current) => new Set([...current, ...created.map((job) => job.id)]));
+      } catch (requestError) {
+        setError(requestError.message);
+      } finally {
+        setDetecting((current) => current.filter((item) => item.id !== temp.id));
+        URL.revokeObjectURL(temp.preview);
+      }
     }
   }, [setup]);
-
-  useEffect(() => {
-    let depth = 0;
-    const onDragEnter = (event) => { if (![...event.dataTransfer.types].includes("Files")) return; event.preventDefault(); depth += 1; setDragging(true); };
-    const onDragOver = (event) => { if ([...event.dataTransfer.types].includes("Files")) event.preventDefault(); };
-    const onDragLeave = (event) => { event.preventDefault(); depth = Math.max(0, depth - 1); if (!depth) setDragging(false); };
-    const onDrop = (event) => { event.preventDefault(); depth = 0; setDragging(false); submitFiles(event.dataTransfer.files); };
-    const onPaste = (event) => { const files = [...event.clipboardData.files]; if (files.some((file) => file.type.startsWith("image/"))) { event.preventDefault(); submitFiles(files); } };
-    window.addEventListener("dragenter", onDragEnter); window.addEventListener("dragover", onDragOver); window.addEventListener("dragleave", onDragLeave); window.addEventListener("drop", onDrop); window.addEventListener("paste", onPaste);
-    return () => { window.removeEventListener("dragenter", onDragEnter); window.removeEventListener("dragover", onDragOver); window.removeEventListener("dragleave", onDragLeave); window.removeEventListener("drop", onDrop); window.removeEventListener("paste", onPaste); };
-  }, [submitFiles]);
 
   useImperativeHandle(ref, () => ({
     pick: () => {
@@ -222,98 +166,215 @@ export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGar
     },
   }), [setup]);
 
-  const perform = async (job, stage, action, prompt = "") => {
-    setBusyId(job.id); setError("");
+  useEffect(() => {
+    let depth = 0;
+    const hasFiles = (event) => [...(event.dataTransfer?.types || [])].includes("Files");
+    const onDragEnter = (event) => { if (!hasFiles(event)) return; event.preventDefault(); depth += 1; setDragging(true); };
+    const onDragOver = (event) => { if (hasFiles(event)) event.preventDefault(); };
+    const onDragLeave = (event) => { event.preventDefault(); depth = Math.max(0, depth - 1); if (!depth) setDragging(false); };
+    const onDrop = (event) => { event.preventDefault(); depth = 0; setDragging(false); submitFiles(event.dataTransfer.files); };
+    const onPaste = (event) => { const files = [...event.clipboardData.files]; if (files.some((file) => file.type.startsWith("image/"))) { event.preventDefault(); submitFiles(files); } };
+    window.addEventListener("dragenter", onDragEnter); window.addEventListener("dragover", onDragOver); window.addEventListener("dragleave", onDragLeave); window.addEventListener("drop", onDrop); window.addEventListener("paste", onPaste);
+    return () => { window.removeEventListener("dragenter", onDragEnter); window.removeEventListener("dragover", onDragOver); window.removeEventListener("dragleave", onDragLeave); window.removeEventListener("drop", onDrop); window.removeEventListener("paste", onPaste); };
+  }, [submitFiles]);
+
+  const toSelect = jobs.filter((job) => phaseOf(job) === "select");
+  const done = jobs.filter((job) => phaseOf(job) === "done");
+  const attention = jobs.filter((job) => phaseOf(job) === "attention");
+  const inProgress = jobs.filter((job) => phaseOf(job) === "working");
+  const chosen = toSelect.filter((job) => picked.has(job.id));
+
+  const replace = (updated) => setJobs((current) => current.map((job) => (job.id === updated.id ? updated : job)));
+  const drop = async (job) => {
+    await api(`${API}/${job.id}`, { method: "DELETE" }).catch(() => {});
+    setJobs((current) => current.filter((item) => item.id !== job.id));
+  };
+
+  // The user's decision: picked items are added, the rest are dropped.
+  const addPicked = async () => {
+    setBusy(true); setError("");
     try {
-      if (stage === "garment" && action === "approve") {
-        const draft = drafts[job.id];
-        const metadata = { ...draft, secondaryColor: draft.secondaryColor || null, tags: draft.tags.split(",").map((tag) => tag.trim()).filter(Boolean) };
-        await api(`${API}/${job.id}/metadata`, { method: "PATCH", body: JSON.stringify({ metadata }) });
-        const updated = await api(`${API}/${job.id}/stages/garment/approve`, { method: "POST" });
-        if (updated.libraryRecord) onGarmentApproved?.(updated.libraryRecord);
-        if (updated.status === "complete") {
-          const remainingJobs = jobsRef.current.filter((item) => item.id !== job.id);
-          setJobs((current) => current.filter((item) => item.id !== job.id));
-          setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== job.id)));
-          setSelectedReviewId(null);
-          if (!remainingJobs.length) setOpen(false);
-        } else {
-          setJobs((current) => current.map((item) => item.id === job.id ? updated : item));
-        }
-      } else {
-        const updated = await api(`${API}/${job.id}/stages/${stage}/${action}`, { method: "POST", body: action === "regenerate" ? JSON.stringify({ prompt }) : undefined });
-        const removeFromQueue = action === "reject" || (stage === "modeled" && action === "approve");
-        const remainingJobs = removeFromQueue ? jobsRef.current.filter((item) => item.id !== job.id) : null;
-        setJobs((current) => removeFromQueue ? current.filter((item) => item.id !== job.id) : current.map((item) => item.id === job.id ? updated : item));
-        if (removeFromQueue) {
-          setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== job.id)));
-          setSelectedReviewId(null);
-          if (!remainingJobs.length) setOpen(false);
-        }
-        if (action === "regenerate") setRegenerationPrompts((current) => ({ ...current, [`${job.id}:${stage}`]: "" }));
-        if (stage === "modeled" && action === "approve" && updated.libraryRecord?.modeledImage) onModeledApproved?.(job.id, updated.libraryRecord.modeledImage);
+      for (const job of toSelect) {
+        if (picked.has(job.id)) replace(await api(`${API}/${job.id}/add`, { method: "POST" }));
+        else await drop(job);
       }
+      setPicked(new Set());
     } catch (requestError) { setError(requestError.message); }
-    finally { setBusyId(null); }
+    finally { setBusy(false); }
   };
 
-  const performCleanup = async (job, action, requestedTolerance) => {
-    setBusyId(job.id); setError("");
+  const dropAllUnpicked = async () => {
+    setBusy(true);
+    for (const job of toSelect) await drop(job);
+    setBusy(false);
+    if (!jobs.some((job) => phaseOf(job) !== "select")) setOpen(false);
+  };
+
+  const retry = async (job) => {
+    setBusy(true); setError("");
+    try { replace(await api(`${API}/${job.id}/stages/garment/regenerate`, { method: "POST", body: JSON.stringify({ prompt: "" }) })); }
+    catch (requestError) { setError(requestError.message); }
+    finally { setBusy(false); }
+  };
+
+  const cleanup = async (job, action, requested) => {
+    setBusy(true); setError("");
     try {
-      const tolerance = requestedTolerance ?? cleanupTolerances[job.id] ?? job.stages?.garment?.cleanupTolerance ?? 46;
+      const tolerance = requested ?? tolerances[job.id] ?? job.stages?.garment?.cleanupTolerance ?? 46;
       const updated = await api(`${API}/${job.id}/stages/garment/cleanup-${action}`, { method: "POST", body: JSON.stringify({ tolerance }) });
-      setJobs((current) => current.map((item) => item.id === job.id ? updated : item));
-      setCleanupTolerances((current) => ({ ...current, [job.id]: updated.stages?.garment?.cleanupTolerance ?? tolerance }));
-      setSelectedReviewId(job.id);
+      replace(updated);
+      setTolerances((current) => ({ ...current, [job.id]: updated.stages?.garment?.cleanupTolerance ?? tolerance }));
+      if (action === "accept") setHelpId(null);
     } catch (requestError) { setError(requestError.message); }
-    finally { setBusyId(null); }
+    finally { setBusy(false); }
   };
 
-  const deleteJob = async (job) => {
-    setBusyId(job.id); setError("");
-    try {
-      await api(`${API}/${job.id}`, { method: "DELETE" });
-      const remaining = jobsRef.current.filter((item) => item.id !== job.id);
-      setJobs(remaining);
-      setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== job.id)));
-      if (selectedReviewId === job.id) setSelectedReviewId(null);
-      if (!remaining.length) setOpen(false);
-    } catch (requestError) { setError(requestError.message); }
-    finally { setBusyId(null); }
+  // Results the user has seen are cleared; work in progress keeps going in the background.
+  const close = () => {
+    setOpen(false);
+    if (!inProgress.length && !toSelect.length && !detecting.length) done.forEach((job) => drop(job));
   };
 
-  const active = jobs[jobs.length - 1];
+  const togglePick = (id) => setPicked((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
   const setupRequired = setup?.ready === false;
-  const activeStatus = setupRequired ? { tone: "error", text: "Нужна настройка" } : active ? deriveStatus(active) : notice;
-  const readyCount = jobs.filter((job) => deriveStatus(job).tone === "ready").length;
-  const selectedReviewJob = jobs.find((job) => job.id === selectedReviewId && (reviewStageFor(job) || hasCleanupFailure(job)));
-  const reviewJob = selectedReviewJob || jobs.find((job) => reviewStageFor(job)) || jobs.find((job) => hasCleanupFailure(job)) || active;
-  const reviewStage = reviewJob ? reviewStageFor(reviewJob) : null;
-  const progress = 0;
-  const hasImportActivity = Boolean(jobs.length || notice);
+  const active = detecting.length || jobs.length;
+  let title = "Добавить вещи";
+  let subtitle = "Сфотографируй вещь или себя в образе — найду каждую вещь на фото";
+  if (setupRequired && !jobs.length) { title = "Нужен код доступа"; subtitle = ""; }
+  else if (toSelect.length) { title = `Нашёл ${toSelect.length} ${plural(toSelect.length, ITEMS)}`; subtitle = "Отметь, что добавить в гардероб. Без твоего выбора ничего не добавлю."; }
+  else if (detecting.length && !jobs.length) { title = "Ищу вещи на фото…"; subtitle = "Обычно это занимает несколько секунд"; }
+  else if (inProgress.length) { title = `Оцифровываю ${inProgress.length} ${plural(inProgress.length, ITEMS)}`; subtitle = "Убираю фон и подписываю. Можно закрыть — работа продолжится."; }
+  else if (attention.length) { title = "Нужна помощь"; subtitle = "С одной из вещей не получилось — посмотри ниже"; }
+  else if (done.length) { title = `Добавлено: ${done.length} ${plural(done.length, ITEMS)}`; subtitle = "Уже в гардеробе. Название и бренд можно поправить."; }
+
+  let pill = null;
+  if (toSelect.length) pill = { icon: <span className="import-pill__count">{toSelect.length}</span>, text: "Выбери вещи" };
+  else if (detecting.length || inProgress.length) pill = { icon: <Spinner label="Идёт оцифровка" />, text: detecting.length && !inProgress.length ? "Ищу вещи на фото" : `Оцифровываю ${done.length}/${done.length + inProgress.length + attention.length}` };
+  else if (attention.length) pill = { icon: <WarningCircle size={18} />, text: "Нужна помощь" };
+  else if (done.length) pill = { icon: <Check size={18} weight="bold" />, text: `Добавлено ${done.length}` };
 
   return (
     <>
-      <input ref={inputRef} type="file" accept="image/*" multiple hidden disabled={!setup?.ready} onChange={(event) => { submitFiles(event.target.files); event.target.value = ""; }} />
-      <div className="import-drop-overlay" data-active={dragging && !setupRequired} aria-hidden={!dragging || setupRequired}><div className="import-drop-target is-over"><UploadSimple size={34} weight="light" /><h2>Отпусти фото здесь</h2><p>Подойдёт фото одной вещи или целого образа.</p></div></div>
-      <aside className={`import-tray${hasImportActivity ? " is-expanded" : ""}`} aria-label="Импорт вещей" hidden={!hasImportActivity}>
-        <button className="import-tray__button" type="button" onClick={() => setupRequired || hasImportActivity ? setOpen(true) : inputRef.current?.click()} aria-label={setupRequired ? "Открыть инструкцию" : hasImportActivity ? "Открыть импорт" : "Добавить вещи"}>{activeStatus?.tone === "processing" ? <SpinnerGap size={19} className="import-spinner" /> : activeStatus?.tone === "error" ? <WarningCircle size={19} /> : readyCount ? <span>{readyCount}</span> : notice ? <X size={18} /> : <Plus size={19} />}</button>
-        <div className="import-tray__actions">{active && <img className="import-tray__preview" src={active.stages?.garment?.assetUrl || active.stages?.garment?.failedAssetUrl || active.stages?.crop?.assetUrl || active.originalAssetUrl} alt="" />}<span className="import-tray__label">{activeStatus?.text || "Добавить вещи"}</span>{!setupRequired && <button className="import-icon-button" type="button" onClick={() => inputRef.current?.click()} aria-label="Выбрать фото"><UploadSimple size={17} /></button>}</div>
-      </aside>
-      <div className="import-popover-backdrop" data-open={open} onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>
-        <section className="import-popover" role="dialog" aria-modal="true" aria-labelledby="import-title">
-          <header className="import-popover__header"><div><p className="import-popover__eyebrow">Импорт в гардероб</p><h2 className="import-popover__title" id="import-title">{setupRequired && !jobs.length ? "Добавить в гардероб" : readyCount ? `Готово к проверке: ${readyCount}` : activeStatus?.tone === "error" ? "Импорт требует внимания" : jobs.length ? "Готовлю новые вещи" : notice?.text || "Добавить в гардероб"}</h2></div><button className="import-icon-button" type="button" onClick={() => setOpen(false)} aria-label="Закрыть импорт"><X size={20} /></button></header>
-          {!jobs.length ? setupRequired ? <div className="import-drop-target import-setup-warning"><WarningCircle size={30} /><h2>Нужен код доступа</h2><p>Чтобы ИИ находил и вырезал вещи, впиши код доступа в «Профиле». Его даёт владелец приложения.</p><button className="import-button import-button--primary" onClick={() => { setOpen(false); onOpenAccess?.(); }}>Ввести код</button></div> : <div className="import-drop-target"><UploadSimple size={28} /><h2>{notice ? "Попробуй другое фото" : "Выбери или вставь фото"}</h2><p>{notice?.detail || "Найду каждую вещь, предложу название и цвет, и ничего не сохраню без твоего подтверждения. Лучше снимать вещь целиком на однотонном фоне."}</p><button className="import-button import-button--primary" disabled={!setup?.ready} onClick={() => { setNotice(null); inputRef.current?.click(); }}>Выбрать фото</button></div> : (
-            <>
-              <div className={`import-progress${activeStatus?.tone !== "processing" ? " is-reviewing" : progress < 100 ? " is-indeterminate" : ""}`}><div className="import-progress__meta"><span>{activeStatus?.text}</span><span>{jobs.length} {plural(jobs.length, ["вещь", "вещи", "вещей"])}</span></div>{activeStatus?.tone === "processing" && <div className="import-progress__track"><div className="import-progress__bar" style={{ "--import-progress": `${progress}%` }} /></div>}</div>
-              {reviewJob && reviewStage ? <ReviewEditor job={reviewJob} stage={reviewStage} draft={drafts[reviewJob.id] || defaultDraft(reviewJob)} setDraft={(draft) => setDrafts((current) => ({ ...current, [reviewJob.id]: draft }))} regenPrompt={regenerationPrompts[`${reviewJob.id}:${reviewStage}`] || ""} setRegenPrompt={(prompt) => setRegenerationPrompts((current) => ({ ...current, [`${reviewJob.id}:${reviewStage}`]: prompt }))} busy={busyId === reviewJob.id} onAction={(action, prompt) => perform(reviewJob, reviewStage, action, prompt)} /> : reviewJob && hasCleanupFailure(reviewJob) ? <CleanupEditor job={reviewJob} tolerance={cleanupTolerances[reviewJob.id] ?? reviewJob.stages.garment.cleanupTolerance ?? 46} setTolerance={(tolerance) => setCleanupTolerances((current) => ({ ...current, [reviewJob.id]: tolerance }))} busy={busyId === reviewJob.id} onPreview={(tolerance) => performCleanup(reviewJob, "preview", tolerance)} onAccept={() => performCleanup(reviewJob, "accept")} /> : null}
-              <div className="import-card-list">{jobs.map((job) => { const status = deriveStatus(job); const itemName = drafts[job.id]?.name || job.metadata?.name || "Новая вещь"; const failedStage = job.stages?.garment?.status === "failed" ? "garment" : job.stages?.modeled?.status === "failed" ? "modeled" : null; return <article className={`import-card is-${status.tone}${reviewJob?.id === job.id ? " is-selected" : ""}`} key={job.id}><img className="import-card__image" src={job.stages?.garment?.assetUrl || job.stages?.garment?.failedAssetUrl || job.stages?.crop?.assetUrl || job.originalAssetUrl} alt="" /><div className="import-card__body"><h3 className="import-card__title">{itemName}</h3><p className="import-card__detail import-card__detail--status" data-tone={status.tone}>{status.tone === "error" ? status.detail : status.text}</p></div><div className="import-card__actions">{status.tone === "ready" && <button className="import-icon-button" onClick={() => { setSelectedReviewId(job.id); setOpen(true); }} aria-label={`Проверить: ${itemName}`}><Check size={17} /></button>}{failedStage && <button className="import-button import-card__retry" disabled={busyId === job.id} onClick={() => perform(job, failedStage, "regenerate", "")}><ArrowCounterClockwise size={14} /> Повторить</button>}<button className="import-icon-button import-card__delete" disabled={busyId === job.id} onClick={() => deleteJob(job)} aria-label={`Убрать ${itemName} из очереди`}><Trash size={16} /></button></div></article>; })}</div>
-              <div className="import-actions"><button className="import-button" onClick={() => inputRef.current?.click()}><Plus size={14} /> Добавить ещё</button></div>
-            </>
-          )}
-          {error && <p className="import-status is-error" role="alert">{error}</p>}
-        </section>
+      <input ref={inputRef} type="file" accept="image/*" multiple hidden onChange={(event) => { submitFiles(event.target.files); event.target.value = ""; }} />
+      <div className="import-drop-overlay" data-active={dragging && !setupRequired} aria-hidden={!dragging || setupRequired}>
+        <div className="import-drop-target is-over"><UploadSimple size={34} weight="light" /><h2>Отпусти фото здесь</h2><p>Подойдёт фото одной вещи или целого образа.</p></div>
       </div>
+
+      {pill && !open && (
+        <button type="button" className="import-pill rise" onClick={() => setOpen(true)}>
+          <span className="import-pill__icon">{pill.icon}</span>
+          <span>{pill.text}</span>
+        </button>
+      )}
+
+      <Sheet open={open} onClose={close} title={title} subtitle={subtitle} className="import-sheet">
+        {setupRequired && !jobs.length ? (
+          <div className="info-card">
+            <span>Чтобы ИИ находил и вырезал вещи, впиши код доступа в «Профиле». Его даёт владелец приложения.</span>
+            <button type="button" className="btn btn--dark btn--small" onClick={() => { setOpen(false); onOpenAccess?.(); }}>Ввести код</button>
+          </div>
+        ) : toSelect.length ? (
+          <>
+            <div className="alt-grid">
+              {toSelect.map((job, i) => {
+                const on = picked.has(job.id);
+                return (
+                  <button type="button" key={job.id} className={`alt-card pick-card rise${on ? " is-current" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={on} onClick={() => togglePick(job.id)}>
+                    <span className="alt-card__image">
+                      <img src={thumbOf(job)} alt="" />
+                      <span className={`pick-card__check${on ? " is-on" : ""}`} aria-hidden="true">{on && <Icon name="check" size={16} width={2.4} />}</span>
+                    </span>
+                    <span className="alt-card__text">
+                      <span className="strong-text">{job.metadata?.name || "Вещь"}</span>
+                      <span className="tiny-text">{PART_LABEL[job.metadata?.part] || "Вещь"}</span>
+                    </span>
+                  </button>
+                );
+              })}
+              {detecting.map((item) => <span key={item.id} className="alt-card pick-card pick-card--loading"><span className="alt-card__image shimmer" /><span className="tiny-text">Ищу вещи…</span></span>)}
+            </div>
+            <div className="action-row">
+              <button type="button" className="btn btn--outline btn--grow1" disabled={busy} onClick={dropAllUnpicked}>Не добавлять</button>
+              <button type="button" className="btn btn--dark btn--grow2" disabled={busy || !chosen.length} onClick={addPicked}>
+                {chosen.length ? `Добавить ${chosen.length} ${plural(chosen.length, ITEMS)}` : "Ничего не выбрано"}
+              </button>
+            </div>
+          </>
+        ) : active ? (
+          <>
+            <div className="import-rows">
+              {detecting.map((item) => (
+                <div className="import-row" key={item.id}>
+                  <div className="import-row__main">
+                    <img className="import-row__thumb" src={item.preview} alt="" />
+                    <span className="import-row__text"><span className="strong-text">Фото</span><span className="tiny-text">Ищу вещи…</span></span>
+                    <Spinner />
+                  </div>
+                </div>
+              ))}
+              {jobs.map((job) => {
+                const phase = phaseOf(job);
+                const garment = job.stages?.garment;
+                return (
+                  <div className={`import-row${phase === "attention" ? " is-attention" : ""}`} key={job.id}>
+                    <div className="import-row__main">
+                      <img className="import-row__thumb" src={thumbOf(job)} alt="" />
+                      <span className="import-row__text">
+                        <span className="strong-text">{job.libraryRecord?.name || job.metadata?.name || "Вещь"}</span>
+                        <span className={`tiny-text${phase === "attention" ? " error-text" : ""}`}>
+                          {phase === "done" ? "В гардеробе" : phase === "attention" ? (garment?.failedAssetUrl ? "Фон убрался не до конца" : garment?.error || "Не получилось вырезать") : garment?.status === "processing" ? "Убираю фон…" : "В очереди"}
+                        </span>
+                      </span>
+                      {phase === "done" && (
+                        <>
+                          <span className="import-row__ok" aria-label="Готово"><Icon name="check" size={16} width={2.4} /></span>
+                          <button type="button" className="text-button" onClick={() => { setOpen(false); onOpenItem?.(job.libraryRecord.id); }}>Исправить</button>
+                        </>
+                      )}
+                      {phase === "working" && <Spinner />}
+                      {phase === "attention" && (
+                        <span className="row-gap">
+                          {garment?.failedAssetUrl && <button type="button" className="text-button" onClick={() => setHelpId(helpId === job.id ? null : job.id)}>Помочь</button>}
+                          <button type="button" className="text-button" disabled={busy} onClick={() => retry(job)}><ArrowCounterClockwise size={14} /> Ещё раз</button>
+                          <button type="button" className="text-button" disabled={busy} onClick={() => drop(job)}>Убрать</button>
+                        </span>
+                      )}
+                    </div>
+                    {helpId === job.id && garment?.failedAssetUrl && (
+                      <CleanupEditor
+                        job={job}
+                        tolerance={tolerances[job.id] ?? garment.cleanupTolerance ?? 46}
+                        setTolerance={(value) => setTolerances((current) => ({ ...current, [job.id]: value }))}
+                        busy={busy}
+                        onPreview={(value) => cleanup(job, "preview", value)}
+                        onAccept={() => cleanup(job, "accept")}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="action-row">
+              <button type="button" className="btn btn--outline btn--grow1" onClick={() => inputRef.current?.click()}>Добавить ещё</button>
+              <button type="button" className="btn btn--dark btn--grow1" onClick={close}>{inProgress.length ? "Свернуть" : "Готово"}</button>
+            </div>
+          </>
+        ) : (
+          <div className="import-empty">
+            <span className="empty-icon"><Icon name="camera" size={26} /></span>
+            <p className="muted-text">Лучше на однотонном фоне и целиком в кадре. Можно сразу несколько вещей или себя в образе — я покажу, что нашёл, и добавлю только то, что ты выберешь.</p>
+            {notice && <p className="error-text">{notice}</p>}
+            <button type="button" className="btn btn--dark" onClick={() => inputRef.current?.click()}>Выбрать фото</button>
+          </div>
+        )}
+        {notice && active ? <p className="tiny-text">{notice}</p> : null}
+        {error && <p className="error-text" role="alert">{error}</p>}
+      </Sheet>
     </>
   );
 });

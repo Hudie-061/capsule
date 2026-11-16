@@ -686,13 +686,19 @@ export function App() {
     setSelectedId(null);
   };
 
+  // New items from «＋» arrive here; the same item can arrive again later with its photo «на мне».
   const addImportedItem = useCallback((newItem) => {
-    setItems((current) => current.some((item) => item.id === newItem.id) ? current : [...current, newItem]);
+    if (!newItem?.id) return;
+    const edits = readEdits()[newItem.id] || {};
+    setItems((current) => (current.some((item) => item.id === newItem.id)
+      ? current.map((item) => (item.id === newItem.id ? { ...item, ...newItem, ...edits } : item))
+      : [...current, { ...newItem, ...edits }]));
   }, []);
 
-  const attachImportedModeledImage = useCallback((jobId, modeledImage) => {
-    const id = `import-${jobId}`;
-    setItems((current) => current.map((item) => item.id === id ? { ...item, modeledImage } : item));
+  const openItem = useCallback((id) => {
+    setTab("wardrobe");
+    setSub(null);
+    setSelectedId(id);
   }, []);
 
   const addItems = () => importRef.current?.pick();
@@ -743,7 +749,7 @@ export function App() {
 
       <BottomNav tab={tab} onTab={(next) => go(next)} onAdd={addItems} />
       {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
-      <WardrobeImportFlow ref={importRef} onGarmentApproved={addImportedItem} onModeledApproved={attachImportedModeledImage} onOpenAccess={openAccess} />
+      <WardrobeImportFlow ref={importRef} onGarmentApproved={addImportedItem} onOpenAccess={openAccess} onOpenItem={openItem} />
       {toast && <p className="toast" role="status">{toast}</p>}
     </div>
   );

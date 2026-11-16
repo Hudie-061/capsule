@@ -36,6 +36,7 @@ function normalizeMetadata(value = {}) {
     secondaryColor: typeof m.secondaryColor === "string" && HEX.test(m.secondaryColor) ? m.secondaryColor.toLowerCase() : null,
     tags: Array.isArray(m.tags) ? m.tags.filter((t) => typeof t === "string").map((t) => t.trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12) : [],
     brand: typeof m.brand === "string" ? m.brand.trim().slice(0, 40) : "",
+    kind: typeof m.kind === "string" ? m.kind.trim().toLowerCase().replace(/[^a-z -]/g, "").slice(0, 24) : "",
     boundingBox: normalizeBoundingBox(m.boundingBox),
   };
 }
@@ -80,6 +81,10 @@ async function resolveJob(job) {
     stage.failedAssetUrl = await assetUrl(stage.failedAssetUrl);
     stage.cleanupPreviewUrl = await assetUrl(stage.cleanupPreviewUrl);
   }
+  if (job.libraryRecordId) {
+    const record = await getRecord(job.libraryRecordId);
+    if (record) copy.libraryRecord = await resolveRecord(record);
+  }
   return copy;
 }
 
@@ -113,6 +118,7 @@ async function persistImported(job, includeModeled) {
     palette: [m.color, m.secondaryColor].filter(Boolean),
     tags: Array.isArray(m.tags) ? m.tags : [],
     brand: m.brand || existing?.brand || "",
+    kind: m.kind || existing?.kind || "",
     image: garmentPath,
     thumbnail: garmentPath,
     modeledImage: modeledImage || existing?.modeledImage || null,
@@ -156,6 +162,8 @@ function generate(jobId, stageName) {
       Object.assign(fresh.stages[stageName], { status: "review", assetUrl: output, failedAssetUrl: null, cleanupPreviewUrl: null, cleanupDiagnostics: null, updatedAt: now() });
       if (chromaKeyUsed) fresh.stages[stageName].chromaKey = chromaKeyUsed;
       await saveJob(fresh);
+      // Items the user picked are added without another review step.
+      if (fresh.auto) await decide(fresh, stageName, "approve");
     } catch (error) {
       const fresh = await loadJob(jobId);
       if (!fresh) return;
@@ -187,6 +195,52 @@ async function resumeOnce() {
     if (["processing", "queued"].includes(job.stages.garment.status)) generate(job.id, "garment");
     else if (job.stages.garment.status === "approved" && ["processing", "queued"].includes(job.stages.modeled.status)) generate(job.id, "modeled");
   }
+}
+
+// Approve or reject a stage that waits for review. Automatic jobs (picked on the «какие добавить?»
+// screen) call this themselves, so the user never sees a separate review step.
+async function decide(job, stageName, decision) {
+  const stage = job.stages[stageName];
+  if (stage.status !== "review") throw new HttpError(409, "Этот шаг ещё не готов к проверке");
+  stage.decision = decision === "approve" ? "approved" : "rejected";
+  stage.status = stage.decision;
+  stage.error = null;
+  stage.updatedAt = now();
+  const startGarment = stageName === "crop" && decision === "approve" && job.stages.garment.status === "pending";
+  let startModeled = false;
+  let libraryRecord = null;
+  if (stageName === "garment" && decision === "approve") {
+    const setup = await setupStatus();
+    if (setup.modeledPhotos && job.stages.modeled.status === "pending") startModeled = true;
+    else { job.stages.modeled.status = "skipped"; job.status = "complete"; }
+  }
+  if (stageName === "modeled" && decision === "approve") job.status = "complete";
+  if (decision === "approve" && stageName !== "crop") {
+    const record = await persistImported(job, stageName === "modeled");
+    job.libraryRecordId = record.id;
+    libraryRecord = await resolveRecord(record);
+  }
+  await saveJob(job);
+  const response = await resolveJob(job);
+  if (libraryRecord) response.libraryRecord = libraryRecord;
+  // Manual jobs disappear at once; automatic ones stay as "complete" until the app has shown the result.
+  if (decision === "reject" || (job.status === "complete" && !job.auto)) await removeJob(job.id);
+  if (startGarment) { job.stages.garment.status = "queued"; await saveJob(job); generate(job.id, "garment"); }
+  if (startModeled) { job.stages.modeled.status = "queued"; await saveJob(job); generate(job.id, "modeled"); }
+  return response;
+}
+
+// Brings jobs from older versions and from closed sessions to the new flow:
+// - a photo whose items were never picked is dropped («не решил — не добавляем»);
+// - everything the user had already agreed to finishes on its own, without review reminders.
+async function settleJob(job) {
+  if (job.stages.crop?.status === "review" && !job.auto) { await removeJob(job.id); return null; }
+  if (!job.auto) { job.auto = true; await saveJob(job); }
+  try {
+    if (job.stages.garment?.status === "review") await decide(job, "garment", "approve");
+    else if (job.stages.modeled?.status === "review") await decide(job, "modeled", "approve");
+  } catch (error) { console.error("import: could not finish an old job", error); }
+  return loadJob(job.id);
 }
 
 // ---- router -----------------------------------------------------------------
@@ -242,10 +296,14 @@ async function route(method, pathname, input) {
   if (pathname === "/api/import/jobs" && method === "GET") {
     resumeOnce();
     const all = Object.values(await loadJobs());
-    const hidden = all.filter((j) => j.status === "complete" || ["crop", "garment", "modeled"].some((s) => j.stages[s]?.status === "rejected"));
-    await Promise.all(hidden.map((j) => removeJob(j.id)));
-    const visible = all.filter((j) => !hidden.includes(j)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    return Promise.all(visible.map(resolveJob));
+    const rejected = all.filter((j) => ["crop", "garment", "modeled"].some((s) => j.stages[s]?.status === "rejected"));
+    await Promise.all(rejected.map((j) => removeJob(j.id)));
+    const settled = [];
+    for (const job of all.filter((j) => !rejected.includes(j))) {
+      const fresh = await settleJob(job);
+      if (fresh) settled.push(fresh);
+    }
+    return Promise.all(settled.sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(resolveJob));
   }
 
   const match = pathname.match(/^\/api\/import\/jobs\/([\w-]{36})(?:\/(.*))?$/);
@@ -256,6 +314,12 @@ async function route(method, pathname, input) {
 
   if (!action && method === "GET") return resolveJob(job);
   if (!action && method === "DELETE") { await removeJob(job.id); return { deleted: true, id: job.id }; }
+  if (action === "add" && method === "POST") {
+    job.auto = true;
+    await saveJob(job);
+    if (job.stages.crop.status === "review") return decide(job, "crop", "approve");
+    return resolveJob(job);
+  }
   if (action === "metadata" && (method === "PATCH" || method === "PUT")) {
     if (!input.metadata || typeof input.metadata !== "object") throw new HttpError(400, "metadata must be an object");
     job.metadata = normalizeMetadata({ ...job.metadata, ...input.metadata });
@@ -275,6 +339,7 @@ async function route(method, pathname, input) {
     Object.assign(stage, { chromaKey: key, cleanupTolerance: cleaned.tolerance, cleanupDiagnostics: cleaned.verification, cleanupPreviewUrl: previewPath, updatedAt: now() });
     if (cleanup[1] === "cleanup-accept") Object.assign(stage, { status: "review", decision: null, error: null, assetUrl: previewPath });
     await saveJob(job);
+    if (cleanup[1] === "cleanup-accept" && job.auto) return decide(job, "garment", "approve");
     return resolveJob(job);
   }
 
@@ -291,28 +356,7 @@ async function route(method, pathname, input) {
       generate(job.id, stageName);
       return resolveJob(job);
     }
-    if (stage.status !== "review") throw new HttpError(409, "Этот шаг ещё не готов к проверке");
-    stage.decision = decision === "approve" ? "approved" : "rejected";
-    stage.status = stage.decision;
-    stage.error = null;
-    stage.updatedAt = now();
-    const startGarment = stageName === "crop" && decision === "approve" && job.stages.garment.status === "pending";
-    let startModeled = false;
-    let libraryRecord = null;
-    if (stageName === "garment" && decision === "approve") {
-      const setup = await setupStatus();
-      if (setup.modeledPhotos && job.stages.modeled.status === "pending") startModeled = true;
-      else { job.stages.modeled.status = "skipped"; job.status = "complete"; }
-    }
-    if (stageName === "modeled" && decision === "approve") job.status = "complete";
-    await saveJob(job);
-    if (decision === "approve" && stageName !== "crop") libraryRecord = await resolveRecord(await persistImported(job, stageName === "modeled"));
-    const response = await resolveJob(job);
-    if (libraryRecord) response.libraryRecord = libraryRecord;
-    if (decision === "reject" || job.status === "complete") await removeJob(job.id);
-    if (startGarment) { job.stages.garment.status = "queued"; await saveJob(job); generate(job.id, "garment"); }
-    if (startModeled) { job.stages.modeled.status = "queued"; await saveJob(job); generate(job.id, "modeled"); }
-    return response;
+    return decide(job, stageName, decision);
   }
   throw new HttpError(404, "Not found");
 }

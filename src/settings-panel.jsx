@@ -138,7 +138,7 @@ export function SettingsView({ focus, onOpen, onToast }) {
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { pickReference(e.target.files?.[0]); e.target.value = ""; }} />
             <button type="button" className="btn btn--outline btn--small" onClick={() => fileRef.current?.click()}>{reference ? "Заменить" : "Загрузить фото"}</button>
             {reference && <button type="button" className="btn btn--ghost btn--small" onClick={removeReference}>Удалить</button>}
-            <label className="toggle"><input type="checkbox" checked={settings.modeledPhotos} onChange={async (e) => { const next = { ...settings, modeledPhotos: e.target.checked }; setSettings(next); setSettings(await saveSettings({ modeledPhotos: next.modeledPhotos })); }} /> <span>Делать фото «на мне» при добавлении вещи</span></label>
+            <label className="toggle"><input type="checkbox" checked={settings.modeledPhotos} onChange={async (e) => { const next = { ...settings, modeledPhotos: e.target.checked }; setSettings(next); setSettings(await saveSettings({ modeledPhotos: next.modeledPhotos })); }} /> <span>Делать фото «на мне» для каждой новой вещи <small className="tiny-text">тратит 1 картинку на вещь · позже в премиум</small></span></label>
           </div>
         </div>
       </div>

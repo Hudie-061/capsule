@@ -51,13 +51,13 @@ async function toPayload(blob) {
 
 const toBlob = (image) => base64ToBlob(image.data, image.mimeType || "image/png");
 
-const plainItem = (i) => ({ id: i.id, name: i.name, part: i.part, color: i.color, secondaryColor: i.secondaryColor || undefined, tags: i.tags || [], brand: i.brand || undefined });
+const plainItem = (i) => ({ id: i.id, name: i.name, part: i.part, color: i.color, secondaryColor: i.secondaryColor || undefined, tags: i.tags || [], brand: i.brand || undefined, kind: i.kind || undefined });
 
 export async function analyzeClothing(imageBlob) {
   const { items } = await task("detect", { image: await toPayload(imageBlob) });
   return (items || []).map((item) => {
     const [ymin = 0, xmin = 0, ymax = 1000, xmax = 1000] = item.box_2d || [];
-    return { name: item.name, part: item.part, color: item.color, secondaryColor: item.secondaryColor || null, tags: item.tags, boundingBox: { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin } };
+    return { name: item.name, part: item.part, kind: item.kind || "", color: item.color, secondaryColor: item.secondaryColor || null, tags: item.tags, boundingBox: { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin } };
   });
 }
 

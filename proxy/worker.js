@@ -112,7 +112,13 @@ function item(value) {
     secondaryColor: HEX.test(v.secondaryColor || "") ? v.secondaryColor : undefined,
     tags: Array.isArray(v.tags) ? v.tags.slice(0, 6).map((t) => text(t, 30)).filter(Boolean) : [],
     brand: text(v.brand, 40) || undefined,
+    kind: kind(v.kind) || undefined,
   };
+}
+
+// Exact type of the item in English ("hoodie", "blazer", "chain"), used for icons and placement.
+function kind(value) {
+  return text(value, 24).toLowerCase().replace(/[^a-z -]/g, "").trim();
 }
 
 const PROFILE_KEYS = ["height", "weight", "build", "goal", "styles", "fits", "palette", "avoid", "notes"];
@@ -197,21 +203,22 @@ const DETECT_SCHEMA = {
       items: {
         type: "OBJECT",
         properties: {
-          name: { type: "STRING" }, part: { type: "STRING", enum: PARTS }, color: { type: "STRING" }, secondaryColor: { type: "STRING" },
+          name: { type: "STRING" }, part: { type: "STRING", enum: PARTS }, kind: { type: "STRING" }, color: { type: "STRING" }, secondaryColor: { type: "STRING" },
           tags: { type: "ARRAY", items: { type: "STRING" } }, box_2d: { type: "ARRAY", items: { type: "INTEGER" } },
         },
-        required: ["name", "part", "color", "tags", "box_2d"],
+        required: ["name", "part", "kind", "color", "tags", "box_2d"],
       },
     },
   },
   required: ["items"],
 };
 
-const DETECT_PROMPT = `Identify every distinct wearable clothing item visible in this image. A photo may show one isolated garment (often lying flat on a bed or floor) or a person wearing several items. Return one record per actual item that should enter a wardrobe. Ignore the person's body, bedding, furniture and other non-wearable objects, even if they are patterned. If the image contains no clothing, return an empty list.
+const DETECT_PROMPT = `Identify every distinct wearable item visible in this image: clothing, shoes and accessories, including small ones such as jewellery, watches and glasses. A photo may show one isolated item (often lying flat on a bed or floor) or a person wearing several items. Return one record per actual item that should enter a wardrobe. Ignore the person's body, bedding, furniture, phones and other non-wearable objects, even if they are patterned. If the image contains nothing wearable, return an empty list.
 For each item return:
 - box_2d: a tight bounding box around only that item as [ymin, xmin, ymax, xmax], integers normalised to 0-1000.
-- part: one of upperbody (t-shirts, shirts, hoodies, sweaters), wholebody_up (jackets, coats, outerwear, dresses), lowerbody (trousers, jeans, shorts, skirts), accessories_up (bags, hats, belts, scarves), shoes.
-- name: in Russian, always "colour + garment type", 2-3 words, the colour adjective agreeing in gender and number with the noun, e.g. "Чёрный бомбер", "Синие джинсы", "Белая футболка", "Бежевая оверсайз-футболка".
+- part: one of upperbody (t-shirts, shirts, hoodies, sweaters), wholebody_up (jackets, blazers, coats, outerwear, dresses), lowerbody (trousers, jeans, shorts, skirts), accessories_up (bags, backpacks, hats, caps, belts, scarves, ties, chains, necklaces, bracelets, rings, earrings, watches, glasses, sunglasses), shoes.
+- kind: the exact type as one short lowercase English noun, e.g. "t-shirt", "shirt", "hoodie", "sweater", "blazer", "jacket", "coat", "dress", "jeans", "trousers", "shorts", "skirt", "sneakers", "boots", "loafers", "bag", "backpack", "cap", "hat", "beanie", "scarf", "belt", "chain", "necklace", "bracelet", "ring", "earrings", "watch", "glasses", "sunglasses".
+- name: in Russian, always "colour + item type", 2-3 words, the colour adjective agreeing in gender and number with the noun, e.g. "Чёрный бомбер", "Синие джинсы", "Белая футболка", "Серебряная цепочка", "Коричневая сумка".
 - color: primary colour as #rrggbb; secondaryColor: a genuinely distinct second colour as #rrggbb or an empty string.
 - tags: 1-4 short lowercase details in Russian (fit, fabric, style), e.g. "оверсайз", "варёный", "бэгги".`;
 
@@ -341,7 +348,7 @@ const TASKS = {
     async run(env, input) {
       const result = await askJson(env, DETECT_PROMPT, DETECT_SCHEMA, { images: [image(input.image)], temperature: 0.2 });
       const items = (Array.isArray(result.items) ? result.items : []).slice(0, 8).map((i) => ({
-        name: text(i.name, 80), part: PARTS.includes(i.part) ? i.part : "upperbody",
+        name: text(i.name, 80), part: PARTS.includes(i.part) ? i.part : "upperbody", kind: kind(i.kind),
         color: HEX.test(i.color || "") ? i.color : "#808080", secondaryColor: HEX.test(i.secondaryColor || "") ? i.secondaryColor : "",
         tags: Array.isArray(i.tags) ? i.tags.slice(0, 4).map((t) => text(t, 30)) : [],
         box_2d: Array.isArray(i.box_2d) ? i.box_2d.slice(0, 4).map((n) => Math.max(0, Math.min(1000, Math.round(Number(n) || 0)))) : [0, 0, 1000, 1000],

@@ -42,7 +42,7 @@ beforeEach(() => {
     upstream.push({ url, headers: init.headers, body, prompt });
     if (url.includes("flash-image")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG.data } }] } }] }), { status: 200 });
     if (prompt.startsWith("Is the following user text")) return reply({ onTopic: topicVerdict });
-    if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
+    if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true }] });
     if (prompt.includes("recommend at most 6")) {
       return reply({ summary: "s", items: [
@@ -195,6 +195,13 @@ describe("no general-purpose access", () => {
     expect(await res.json()).toEqual({ rules: ["Старое правило"], remembered: "", ignored: true });
     const ok = await (await worker.fetch(call("/api/learn", { comment: "не люблю бэгги", outfitItems: wardrobe, liked: false, rules: [] }), env())).json();
     expect(ok.rules).toEqual(["Не предлагать бэгги-джинсы"]);
+  });
+
+  it("detects accessories and jewellery and returns a clean item kind", async () => {
+    const out = await (await worker.fetch(call("/api/detect", { image: PNG }), env())).json();
+    expect(upstream[0].prompt).toMatch(/jewellery, watches and glasses/);
+    expect(upstream[0].prompt).toContain("chains, necklaces, bracelets, rings");
+    expect(out.items[0].kind).toBe("t-shirt");
   });
 
   it("returns shopping gaps with a category, colour and a clean search query", async () => {

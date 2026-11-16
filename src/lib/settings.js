@@ -23,13 +23,19 @@ export async function getSettings() {
   return {
     proxyUrl: normalizeProxyUrl(saved.proxyUrl) || DEFAULTS.proxyUrl,
     accessCode: String(saved.accessCode || "").trim(),
-    modeledPhotos: saved.modeledPhotos !== false,
+    // Photo «на мне» for every new item costs one image each. Off by default for everyone
+    // (a new key, so the old default "on" is not carried over); later a premium option.
+    modeledPhotos: saved.modeledPhotosOn === true,
   };
 }
 
 export async function saveSettings(patch) {
   const current = (await kv.get(SETTINGS_KEY, {})) || {};
   const next = { ...current, ...patch };
+  if ("modeledPhotos" in next) {
+    if ("modeledPhotos" in patch) next.modeledPhotosOn = Boolean(patch.modeledPhotos);
+    delete next.modeledPhotos;
+  }
   if (typeof next.proxyUrl === "string") next.proxyUrl = normalizeProxyUrl(next.proxyUrl);
   if (typeof next.accessCode === "string") next.accessCode = next.accessCode.trim();
   await kv.set(SETTINGS_KEY, next);
