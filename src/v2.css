@@ -297,6 +297,15 @@ button:disabled { cursor: default; }
 .gap-card--skeleton { min-height: 124px; border: 0; }
 .gap-card--busy { align-items: center; justify-content: center; min-height: 124px; }
 .gap-why { margin-top: 10px; }
+.my-size { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 12px; }
+.my-size__chip {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--card); color: var(--dark); font: inherit; font-size: 13px;
+}
+.my-size__chip b { font-weight: 700; }
+.my-size__chip.is-on { border-color: var(--dark); background: var(--dark); color: var(--on-dark); }
+.my-size__note { flex-basis: 100%; }
+.my-size__add { margin-top: 10px; display: inline-flex; align-items: center; gap: 6px; }
 .filter-row { display: flex; gap: 6px; }
 .filter-pill {
   min-height: 36px; border-radius: 999px; padding: 6px 14px; font: inherit; font-size: 13px; font-weight: 600;

@@ -525,7 +525,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           })}
         </div>
         {alternatives.length < 2 && <p className="muted-text">Других вещей этой категории пока нет. Добавь их кнопкой «＋» или найди новую.</p>}
-        <button type="button" className="dark-link" onClick={() => { const piece = swapping; setSwapId(null); onNavigate("shopping", { focus: { label: `Похожее на: ${piece.name}`, part: piece.part, color: piece.color, query: piece.name } }); }}>
+        <button type="button" className="dark-link" onClick={() => { const piece = swapping; setSwapId(null); onNavigate("shopping", { focus: { label: `Похожее на: ${piece.name}`, part: piece.part, kind: piece.kind, color: piece.color, query: piece.name } }); }}>
           <span className="dark-link__icon"><Icon name="bag" size={20} width={1.9} /></span>
           <span className="dark-link__text"><span>Нет подходящих? Найдём дешевле</span><small>Новое и б/у — в магазинах Бельгии</small></span>
           <Icon name="chevron" size={20} width={2} />

@@ -4,10 +4,15 @@
 //    SerpApi), sorted by price with delivery, with a "best price" badge. Until the owner adds the
 //    search key, the screen honestly falls back to search links in that country's shops.
 // 3. «Купил здесь» records a purchase; the saving vs the most expensive offer adds up for the month.
+// 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
+//    profile's height and weight) is added to the search; the chip turns it off.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
+import { kindOf } from "./lib/kinds.js";
+import { bodyOrProfile, getBody, sizeForKind } from "./lib/sizes.js";
+import { splitList } from "./lib/style-options.js";
 import { SetupError, pricesTask } from "./lib/gemini.js";
 import { plural } from "./lib/plural.js";
 import { addPurchase, getFeedback, getLearned, getProfile, getPurchases, getSettings, saveSettings } from "./lib/settings.js";
@@ -44,7 +49,7 @@ const deliveryText = (offer, currency) => (offer.delivery === 0 ? "Беспла�
 // Offers are kept on the device for a day, so going back and forth costs nothing.
 const offersKey = (country, query) => `offers:${country}:${query.toLowerCase()}`;
 
-export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAccess }) {
+export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAccess, onOpenSizes }) {
   const [cache, setCache] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -56,8 +61,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [pricesOff, setPricesOff] = useState(false);
   const [purchases, setPurchases] = useState([]);
   const [bought, setBought] = useState("");
+  const [fit, setFit] = useState({ body: null, oversize: false });
+  const [sizeOn, setSizeOn] = useState(true);
 
-  useEffect(() => { getSettings().then((s) => setCountry(s.country)); getPurchases().then(setPurchases); }, []);
+  useEffect(() => {
+    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); });
+    getPurchases().then(setPurchases);
+    Promise.all([getBody(), getProfile()]).then(([body, profile]) => setFit({ body: bodyOrProfile(body, profile), oversize: splitList(profile.fits).includes("Оверсайз") }));
+  }, []);
 
   const load = useCallback(async () => {
     setBusy(true); setError("");
@@ -87,10 +98,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   // A piece opened from «Сегодня» («Нет подходящих? Найдём дешевле») comes first.
   const gaps = useMemo(() => {
     const list = cache?.result?.items || [];
-    return focus ? [{ item: focus.label, part: focus.part, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: "Похожие вещи — новые и б/у.", focus: true }, ...list] : list;
+    return focus ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: "Похожие вещи — новые и б/у.", focus: true }, ...list] : list;
   }, [cache, focus]);
   const gap = gaps[Math.min(selected, gaps.length - 1)] || null;
-  const query = gap ? gap.query || gap.item : "";
+  const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize }) : null;
+  const sizable = gap ? Boolean(sizeForKind(kindOf(gap), { height: 175 })) : false;
+  const baseQuery = gap ? gap.query || gap.item : "";
+  const query = size && sizeOn ? `${baseQuery} ${size.query}` : baseQuery; // to the Worker
+  const shownQuery = size && sizeOn ? `${baseQuery} ${size.shown}` : baseQuery; // to the user and shop links
   const place = countryById(country);
   const currency = offers.data?.currency || place.currency;
 
@@ -134,6 +149,13 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     const next = await addPurchase({ title: offer.title, store: offer.store, link: offer.link, total: offer.total, maxTotal: top, saving: Math.max(0, Math.round((top - offer.total) * 100) / 100), currency, gap: gap?.item || "" });
     setPurchases([...next]);
     setBought(offer.link);
+  };
+
+  const toggleSize = async () => {
+    const next = !sizeOn;
+    setSizeOn(next);
+    setBought("");
+    await saveSettings({ sizeInSearch: next });
   };
 
   const chooseCountry = async (id) => {
@@ -191,6 +213,21 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         </div>
       )}
       {gap?.why && <p className="muted-text gap-why fade" key={gap.item}>{gap.why}</p>}
+      {gap && size && (
+        <div className="my-size fade" key={`size-${gap.item}`}>
+          <button type="button" className={`my-size__chip${sizeOn ? " is-on" : ""}`} aria-pressed={sizeOn} onClick={toggleSize}>
+            {sizeOn && <Icon name="check" size={14} width={2.6} />}
+            <span>Мой размер <b>{size.value}</b></span>
+          </button>
+          <span className="tiny-text">
+            {[size.detail, size.estimated ? "по оценке" : "по меркам", sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")}
+          </span>
+          {size.note && <span className="size-card__note my-size__note">{size.note}</span>}
+        </div>
+      )}
+      {gap && !size && sizable && onOpenSizes && (
+        <button type="button" className="text-button my-size__add" onClick={onOpenSizes}><Icon name="ruler" size={14} width={2} /> Укажи рост и мерки — буду искать твой размер</button>
+      )}
       {error && error !== "setup" && gaps.length > 0 && <p className="error-text">{error}</p>}
 
       {gap && (
@@ -239,7 +276,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
               {offers.status !== "done" && (
                 <div className="offer-list">
                   {links.map((s, i) => (
-                    <a key={s.id} className={`offer offer--link rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.url(query)} target="_blank" rel="noopener noreferrer">
+                    <a key={s.id} className={`offer offer--link rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.url(shownQuery)} target="_blank" rel="noopener noreferrer">
                       <span className="offer__icon"><GarmentIcon item={gap} size={38} /></span>
                       <span className="offer__text">
                         <span className="offer__title"><span className="strong-text">{s.name}</span><span className="tag tag--small">{s.cond === "new" ? "Новое" : "Б/у"}</span></span>
@@ -253,11 +290,11 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
               {offers.status === "done" && links.length > 0 && (
                 <div className="more-links">
                   <span className="tiny-text">Поискать ещё:</span>
-                  {links.map((s) => <a key={s.id} className="filter-pill" href={s.url(query)} target="_blank" rel="noopener noreferrer">{s.name}</a>)}
+                  {links.map((s) => <a key={s.id} className="filter-pill" href={s.url(shownQuery)} target="_blank" rel="noopener noreferrer">{s.name}</a>)}
                 </div>
               )}
               <p className="tiny-text center-text">
-                {offers.status === "off" ? `Ищем «${query}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${query}» · ${place.name}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${query}» по ссылкам.`}
+                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${shownQuery}» · ${place.name}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
               </p>
             </>
           )}

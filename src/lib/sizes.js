@@ -61,22 +61,78 @@ const letterFor = (chest, f) => {
 };
 const nearest = (value, list) => list.reduce((a, b) => (Math.abs(b - value) < Math.abs(a - value) ? b : a));
 
-export function sizesFor(body, { oversize = false } = {}) {
+// The numbers behind every size, so the profile cards and the shop search say the same thing.
+function sizeNumbers(body) {
   const { values: v, estimated } = fullBody(body);
   const f = female(body?.gender);
-  const est = (...ids) => ids.some((id) => estimated.has(id));
-  const top = letterFor(v.chest, f);
-  const euTop = f ? Math.min(54, Math.max(32, 34 + 2 * Math.floor((v.chest - 80) / 4))) : 2 * Math.round(v.chest / 4);
-  const euTrousers = f ? Math.min(54, Math.max(32, 34 + 2 * Math.floor((v.waist - 64) / 4))) : 2 * Math.round((v.waist / 2 + 6) / 2);
-  const shoeEu = Math.round((v.foot + 1.5) * 1.5 * 2) / 2;
+  return {
+    f, v, estimated,
+    top: letterFor(v.chest, f),
+    euTop: f ? Math.min(54, Math.max(32, 34 + 2 * Math.floor((v.chest - 80) / 4))) : 2 * Math.round(v.chest / 4),
+    euTrousers: f ? Math.min(54, Math.max(32, 34 + 2 * Math.floor((v.waist - 64) / 4))) : 2 * Math.round((v.waist / 2 + 6) / 2),
+    w: Math.round(v.waist / 2.54),
+    l: nearest(v.inseam / 2.54, [28, 30, 32, 34, 36]),
+    shoeEu: Math.round((v.foot + 1.5) * 1.5 * 2) / 2,
+    collar: Math.round(v.neck + 1),
+  };
+}
+
+const sizeUp = (n, oversize) => (oversize && n.top < LETTERS.length - 1 ? `Для оверсайза бери ${LETTERS[n.top + 1]}` : "");
+
+export function sizesFor(body, { oversize = false } = {}) {
+  const n = sizeNumbers(body);
+  const est = (...ids) => ids.some((id) => n.estimated.has(id));
   const sizes = [
-    { id: "top", label: "Футболки, худи, свитеры", value: LETTERS[top], detail: `EU ${euTop}`, estimated: est("chest"),
-      note: oversize && top < LETTERS.length - 1 ? `Для оверсайза бери ${LETTERS[top + 1]}` : "" },
-    { id: "jeans", label: "Джинсы", value: `W${Math.round(v.waist / 2.54)} L${nearest(v.inseam / 2.54, [28, 30, 32, 34, 36])}`, detail: `брюки EU ${euTrousers}`, estimated: est("waist", "inseam") },
-    { id: "shoes", label: "Обувь", value: `EU ${shoeEu}`, detail: `стопа ${v.foot.toFixed(1)} см · Mondopoint ${Math.round(v.foot * 10)}`, estimated: est("foot") },
+    { id: "top", label: "Футболки, худи, свитеры", value: LETTERS[n.top], detail: `EU ${n.euTop}`, estimated: est("chest"), note: sizeUp(n, oversize) },
+    { id: "jeans", label: "Джинсы", value: `W${n.w} L${n.l}`, detail: `брюки EU ${n.euTrousers}`, estimated: est("waist", "inseam") },
+    { id: "shoes", label: "Обувь", value: `EU ${n.shoeEu}`, detail: `стопа ${n.v.foot.toFixed(1)} см · Mondopoint ${Math.round(n.v.foot * 10)}`, estimated: est("foot") },
   ];
-  if (!f) sizes.splice(2, 0, { id: "shirt", label: "Рубашки", value: `ворот ${Math.round(v.neck + 1)}`, detail: "размер по обхвату шеи", estimated: est("neck") });
+  if (!n.f) sizes.splice(2, 0, { id: "shirt", label: "Рубашки", value: `ворот ${n.collar}`, detail: "размер по обхвату шеи", estimated: est("neck") });
   return sizes;
+}
+
+// The size to look for when shopping for a piece of this kind (see kinds.js).
+// `shown` is what the user sees in the search line and what goes into the shop links;
+// `query` is what goes to the Worker's price search. They differ only for half shoe sizes:
+// the Worker keeps only letters, digits, spaces and hyphens, so "42.5" would turn into "42 5",
+// and "size 42" also finds offers labelled 42.5. `value` and `detail` label the chip.
+// Accessories have no size.
+const LETTER_KINDS = new Set(["t-shirt", "shirt", "hoodie", "sweater", "jacket", "coat", "dress"]);
+const SHOE_KINDS = new Set(["sneakers", "boots", "loafers"]);
+
+export function sizeForKind(kind, body, { oversize = false } = {}) {
+  if (!body?.height) return null;
+  const n = sizeNumbers(body);
+  const est = (...ids) => ids.some((id) => n.estimated.has(id));
+  const wl = `W${n.w} L${n.l}`;
+  if (LETTER_KINDS.has(kind)) {
+    const letter = LETTERS[n.top];
+    const detail = kind === "shirt" && !n.f ? `ворот ${n.collar}` : `EU ${n.euTop}`;
+    return { value: letter, query: `size ${letter}`, shown: `size ${letter}`, detail, estimated: est("chest"), note: sizeUp(n, oversize) };
+  }
+  if (kind === "blazer") return { value: `EU ${n.euTop}`, query: `size ${n.euTop}`, shown: `size ${n.euTop}`, detail: LETTERS[n.top], estimated: est("chest"), note: "" };
+  if (kind === "jeans") return { value: wl, query: wl, shown: wl, detail: `EU ${n.euTrousers}`, estimated: est("waist", "inseam"), note: "" };
+  if (kind === "trousers") {
+    return n.f
+      ? { value: `EU ${n.euTrousers}`, query: `size ${n.euTrousers}`, shown: `size ${n.euTrousers}`, detail: wl, estimated: est("waist"), note: "" }
+      : { value: wl, query: wl, shown: wl, detail: `EU ${n.euTrousers}`, estimated: est("waist", "inseam"), note: "" };
+  }
+  if (kind === "shorts" || kind === "skirt") {
+    return n.f
+      ? { value: `EU ${n.euTrousers}`, query: `size ${n.euTrousers}`, shown: `size ${n.euTrousers}`, detail: `W${n.w}`, estimated: est("waist"), note: "" }
+      : { value: `W${n.w}`, query: `W${n.w}`, shown: `W${n.w}`, detail: `EU ${n.euTrousers}`, estimated: est("waist"), note: "" };
+  }
+  if (SHOE_KINDS.has(kind)) return { value: `EU ${n.shoeEu}`, query: `size ${Math.floor(n.shoeEu)}`, shown: `size ${n.shoeEu}`, detail: `стопа ${n.v.foot.toFixed(1)} см`, estimated: est("foot"), note: "" };
+  return null;
+}
+
+// Saved measurements first; otherwise height, weight and gender from the profile («166 см»).
+export function bodyOrProfile(body, profile) {
+  if (body?.height) return body;
+  const height = Number.parseFloat(String(profile?.height || "").replace(",", "."));
+  const weight = Number.parseFloat(String(profile?.weight || "").replace(",", "."));
+  if (!(height >= 120 && height <= 230)) return null;
+  return { gender: profile?.gender || "", height, weight: weight >= 30 && weight <= 250 ? weight : undefined, measured: {} };
 }
 
 // One line for the profile card and for the stylist ("верх M, джинсы W32 L32, обувь EU 43").

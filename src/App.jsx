@@ -595,6 +595,7 @@ export function App() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState("today");
   const [sub, setSub] = useState(null); // "palette" | "timing" inside «Профиль»
+  const [backTo, setBackTo] = useState(null); // a tab to return to from a sub-screen opened elsewhere
   const [shopping, setShopping] = useState({ focus: null, refreshKey: 0 });
   const [profileFocus, setProfileFocus] = useState(null);
   const [setupReady, setSetupReady] = useState(true);
@@ -641,6 +642,7 @@ export function App() {
   const go = useCallback((next, options = {}) => {
     setTab(next);
     setSub(options.sub || null);
+    setBackTo(options.backTo || null);
     setSelectedId(null);
     if (next === "shopping") setShopping((current) => ({ focus: options.focus || null, refreshKey: options.refresh ? current.refreshKey + 1 : current.refreshKey }));
     setProfileFocus(options.profileFocus || null);
@@ -707,6 +709,7 @@ export function App() {
   const openItem = useCallback((id) => {
     setTab("wardrobe");
     setSub(null);
+    setBackTo(null);
     setSelectedId(id);
   }, []);
 
@@ -716,11 +719,11 @@ export function App() {
     <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
       <main className="app-main" key={`${tab}:${sub || ""}`}>
         {tab === "today" && <TodayView items={items} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast} />}
-        {tab === "shopping" && <ShoppingView items={items} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} />}
+        {tab === "shopping" && <ShoppingView items={items} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} onOpenSizes={() => go("profile", { sub: "sizes", backTo: "shopping" })} />}
         {tab === "profile" && !sub && <SettingsView items={items} focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} onRestartOnboarding={() => setOnboarding({ needsAccess: !setupReady })} />}
         {tab === "profile" && sub === "palette" && <PaletteView setupReady={setupReady} onOpenAccess={openAccess} onBack={() => setSub(null)} onFindClothes={() => go("shopping", { refresh: true })} />}
         {tab === "profile" && sub === "timing" && <TimingView onBack={() => setSub(null)} onToast={showToast} />}
-        {tab === "profile" && sub === "sizes" && <SizesView onBack={() => setSub(null)} onToast={showToast} />}
+        {tab === "profile" && sub === "sizes" && <SizesView onBack={() => (backTo ? go(backTo) : setSub(null))} onToast={showToast} />}
         {tab === "wardrobe" && (
           <section className="screen screen--wide wardrobe">
             <div className="wardrobe-head rise">
