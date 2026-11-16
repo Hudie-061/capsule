@@ -9,6 +9,7 @@ import { Onboarding, isOnboardingDone } from "./onboarding.jsx";
 import { PaletteView } from "./palette.jsx";
 import { SettingsView } from "./settings-panel.jsx";
 import { ShoppingView } from "./shopping.jsx";
+import { SizesView } from "./sizes.jsx";
 import { TimingView } from "./timing.jsx";
 import { TodayView } from "./today.jsx";
 import { Icon } from "./ui.jsx";
@@ -719,6 +720,7 @@ export function App() {
         {tab === "profile" && !sub && <SettingsView items={items} focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} onRestartOnboarding={() => setOnboarding({ needsAccess: !setupReady })} />}
         {tab === "profile" && sub === "palette" && <PaletteView setupReady={setupReady} onOpenAccess={openAccess} onBack={() => setSub(null)} onFindClothes={() => go("shopping", { refresh: true })} />}
         {tab === "profile" && sub === "timing" && <TimingView onBack={() => setSub(null)} onToast={showToast} />}
+        {tab === "profile" && sub === "sizes" && <SizesView onBack={() => setSub(null)} onToast={showToast} />}
         {tab === "wardrobe" && (
           <section className="screen screen--wide wardrobe">
             <div className="wardrobe-head rise">

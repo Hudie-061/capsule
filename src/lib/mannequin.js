@@ -87,7 +87,8 @@ function drawHead(ctx) {
 }
 
 // ---- layout: a box for every item, shared by the drawing and the callouts --------------------------
-const SHOE_HEIGHT = { boots: 150, loafers: 78, sneakers: 96 };
+// Shoes are drawn a little larger than life so they stay readable next to the whole outfit.
+const SHOE_HEIGHT = { boots: 175, loafers: 100, sneakers: 118 };
 
 export function layoutOutfit(items, options = {}) {
   const b = bodyFor(options);
@@ -105,7 +106,7 @@ export function layoutOutfit(items, options = {}) {
   const placed = [];
   const box = (item, role, x0, y0, x1, y1, extra = {}) => placed.push({ item, role, x0, y0, x1, y1, ...extra });
 
-  if (shoes) box(shoes, "shoes", CX - 128, Y.floor - shoeH, CX + 128, Y.floor + 8, { align: "bottom" });
+  if (shoes) box(shoes, "shoes", CX - 152, Y.floor - shoeH, CX + 152, Y.floor + 8, { align: "bottom" });
   if (bottom) {
     const k = kindOf(bottom);
     const hem = k === "shorts" ? 650 : k === "skirt" ? Y.knee : shoes ? Y.floor - shoeH + (k === "jeans" || k === "trousers" ? 22 : 18) : Y.ankle + 12;
@@ -121,7 +122,8 @@ export function layoutOutfit(items, options = {}) {
   if (outer) {
     const long = kindOf(outer) === "coat";
     const span = b.shoulder + 82;
-    box(outer, "outer", CX - span, Y.neck - 22, CX + span, long ? Y.knee + 30 : b.hipY + 70, { align: "top" });
+    // Over a top the jacket is worn open, so the top underneath stays visible.
+    box(outer, "outer", CX - span, Y.neck - 22, CX + span, long ? Y.knee + 30 : b.hipY + 70, { align: "top", open: Boolean(top) && kindOf(outer) !== "hoodie" });
   }
   const acc = (slot, x0, y0, x1, y1, align = "center") => { const item = slots.get(slot); if (item) box(item, slot, x0, y0, x1, y1, { align }); };
   acc("waist", CX - b.waist - 22, b.waistY - 18, CX + b.waist + 22, b.waistY + 18);
@@ -147,8 +149,11 @@ const ANCHOR = {
   shoes: (p) => [CX - 44, (p.y0 + p.y1) / 2],
 };
 export function outfitAnchors(items, options = {}) {
-  return layoutOutfit(items, options).placed.map((p) => {
-    const [x, y] = (ANCHOR[p.role] || ((q) => [(q.x0 + q.x1) / 2, (q.y0 + q.y1) / 2]))(p);
+  const { placed } = layoutOutfit(items, options);
+  const openOuter = placed.some((q) => q.role === "outer" && q.open);
+  return placed.map((p) => {
+    // Under an open jacket the top shows only in the middle, so its callout points there.
+    const [x, y] = p.role === "top" && openOuter ? [CX + 12, p.y0 + 150] : (ANCHOR[p.role] || ((q) => [(q.x0 + q.x1) / 2, (q.y0 + q.y1) / 2]))(p);
     return { id: p.item.id, x, y, side: x >= CX ? "right" : "left" };
   });
 }
@@ -194,6 +199,12 @@ function place(ctx, img, p) {
   const h = img.height * scale;
   const left = (p.x0 + p.x1) / 2 - w / 2;
   const top = p.align === "bottom" ? p.y1 - h : p.align === "top" ? p.y0 : p.y0 + (bh - h) / 2;
+  if (p.open) {
+    const gap = w * 0.075;
+    ctx.drawImage(img, 0, 0, img.width / 2, img.height, left - gap, top, w / 2, h);
+    ctx.drawImage(img, img.width / 2, 0, img.width / 2, img.height, left + w / 2 + gap, top, w / 2, h);
+    return;
+  }
   if (p.cropAt !== undefined && top + h > p.cropAt) {
     const visible = Math.max(1, p.cropAt - top);
     ctx.drawImage(img, 0, 0, img.width, img.height * (visible / h), left, top, w, visible);

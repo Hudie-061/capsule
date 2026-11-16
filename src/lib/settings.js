@@ -26,6 +26,7 @@ export async function getSettings() {
     // Photo «на мне» for every new item costs one image each. Off by default for everyone
     // (a new key, so the old default "on" is not carried over); later a premium option.
     modeledPhotos: saved.modeledPhotosOn === true,
+    country: typeof saved.country === "string" && /^[a-z]{2}$/.test(saved.country) ? saved.country : "be",
   };
 }
 
@@ -59,6 +60,8 @@ export const MODEL_REFERENCE_PATH = MODEL_REFERENCE_KEY;
 export const EMPTY_PROFILE = {
   gender: "",
   height: "",
+  sizes: "",
+  places: "",
   weight: "",
   build: "",
   goal: "",
@@ -95,6 +98,15 @@ export async function amendFeedback(at, patch) {
   if (index < 0) return list;
   list[index] = { ...list[index], ...patch };
   await kv.set("feedback", list);
+  return list;
+}
+
+// Purchases marked with «Купил здесь»: the saving is the gap to the most expensive offer found for the same piece.
+export const getPurchases = async () => (await kv.get("purchases", [])) || [];
+export async function addPurchase(entry) {
+  const list = await getPurchases();
+  list.push({ ...entry, at: new Date().toISOString() });
+  await kv.set("purchases", list.slice(-300));
   return list;
 }
 

@@ -7,11 +7,7 @@ import { checkConnection } from "./lib/gemini.js";
 import { getProfile, getSettings, saveProfile, saveSettings } from "./lib/settings.js";
 import { GarmentIcon, Icon } from "./ui.jsx";
 
-const STYLES = ["Casual", "Street", "Классика", "Минимализм", "Smart casual", "Спорт", "Old money", "Бохо", "Гранж", "Y2K"];
-const FITS = ["Оверсайз", "Прямой", "Приталенный", "Свободный низ", "Укороченный верх"];
-const AVOID = ["Узкие джинсы", "Яркие цвета", "Крупные принты", "Шорты", "Каблуки", "Галстуки", "Обтягивающее"];
-const PLACES = ["Учёба", "Работа", "Спорт", "Вечеринки", "Свидания", "Дом"];
-const GENDERS = [["male", "Мужчина"], ["female", "Женщина"], ["", "Не указывать"]];
+import { AVOID, FITS, GENDERS, PLACES, STYLES } from "./lib/style-options.js";
 
 export const isOnboardingDone = async () => Boolean((await kv.get("onboarding", null))?.done);
 const finishOnboarding = () => kv.set("onboarding", { done: true, at: new Date().toISOString() });
@@ -56,14 +52,13 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
       if (p.gender) setGender(p.gender);
       const h = Number.parseInt(p.height, 10); if (h >= 140 && h <= 210) { setHeight(h); setBodyTouched(true); }
       const w = Number.parseInt(p.weight, 10); if (w >= 40 && w <= 150) setWeight(w);
-      setStyles(split(p.styles)); setFits(split(p.fits)); setAvoid(split(p.avoid));
+      setStyles(split(p.styles)); setFits(split(p.fits)); setAvoid(split(p.avoid)); setPlaces(split(p.places));
     });
     getSettings().then((s) => setCode(s.accessCode || ""));
   }, []);
 
   const save = async () => {
     const p = await getProfile();
-    const notes = places.size ? `Чаще всего: ${join(places).toLowerCase()}` : "";
     await saveProfile({
       ...p,
       gender,
@@ -72,7 +67,7 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
       styles: styles.size ? join(styles) : p.styles,
       fits: fits.size ? join(fits) : p.fits,
       avoid: avoid.size ? join(avoid) : p.avoid,
-      notes: notes && !String(p.notes || "").includes(notes) ? [p.notes, notes].filter(Boolean).join("; ") : p.notes,
+      places: places.size ? join(places) : p.places,
     });
   };
 

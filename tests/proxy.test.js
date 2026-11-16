@@ -31,17 +31,31 @@ const call = (path, body, { code = "abc123", origin = "https://huy.github.io", m
 let upstream;
 let topicVerdict;
 let paletteIsPerson;
+let serp;
+const SERP = { shopping_results: [
+  { title: "Dark straight jeans", source: "Zalando", product_link: "https://shop.example/a", extracted_price: 49.95, delivery: "Free delivery", thumbnail: "https://img.example/a.jpg" },
+  { title: "Levi's 501 dark", source: "Vinted", product_link: "https://www.vinted.be/items/1", extracted_price: 18, delivery: "+€3,90 delivery" },
+  { title: "Straight jeans", source: "Shop C", product_link: "https://shop.example/c", price: "€29,99", delivery: "Delivery by Nov 20" },
+  { title: "No price", source: "Shop D", product_link: "https://shop.example/d" },
+  { title: "Bad link", source: "Shop E", product_link: "javascript:alert(1)", extracted_price: 5 },
+  { title: "Pre-owned jeans", source: "Shop F", link: "https://shop.example/f", extracted_price: 25, second_hand_condition: "used" },
+] };
 const reply = (obj) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] } }] }), { status: 200 });
 beforeEach(() => {
   upstream = [];
   topicVerdict = true;
   paletteIsPerson = true;
+  serp = SERP;
   vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+    if (String(url).includes("serpapi")) {
+      upstream.push({ url: String(url), serp: true });
+      return new Response(JSON.stringify(serp), { status: 200 });
+    }
     const body = JSON.parse(init.body);
     const prompt = body.contents[0].parts[0].text;
     upstream.push({ url, headers: init.headers, body, prompt });
     if (url.includes("flash-image")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG.data } }] } }] }), { status: 200 });
-    if (prompt.startsWith("Is the following user text")) return reply({ onTopic: topicVerdict });
+    if (prompt.startsWith("Is the following user text") || prompt.startsWith("Is the following text a product search")) return reply({ onTopic: topicVerdict });
     if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true }] });
     if (prompt.includes("recommend at most 6")) {
@@ -258,6 +272,62 @@ describe("no general-purpose access", () => {
   });
 });
 
+describe("price search", () => {
+  const search = (body, e) => worker.fetch(call("/api/prices", body), e);
+
+  it("answers clearly when no SerpApi key is set, without spending anything", async () => {
+    const e = env();
+    const res = await search({ query: "dark straight jeans", country: "be" }, e);
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("prices_not_configured");
+    expect(upstream).toHaveLength(0);
+    expect([...e.USAGE.map.keys()]).toHaveLength(0);
+  });
+
+  it("finds offers, sorts by price with delivery, marks second-hand and drops broken results", async () => {
+    const e = env({ SERPAPI_KEY: "SERP-SECRET" });
+    const res = await search({ query: "dark straight jeans <b>", country: "nl" }, e);
+    expect(res.status).toBe(200);
+    const out = await res.json();
+    const serpCall = upstream.find((c) => c.serp);
+    expect(serpCall.url).toContain("engine=google_shopping");
+    expect(serpCall.url).toContain("gl=nl");
+    expect(serpCall.url).toContain("q=dark+straight+jeans");
+    expect(out.currency).toBe("EUR");
+    expect(out.offers.map((o) => [o.store, o.total, o.condition, o.delivery])).toEqual([
+      ["Vinted", 21.9, "used", 3.9],
+      ["Shop F", 25, "used", null],
+      ["Shop C", 29.99, "new", null],
+      ["Zalando", 49.95, "new", 0],
+    ]);
+    expect(JSON.stringify(out)).not.toContain("SERP-SECRET");
+  });
+
+  it("serves the same search from the 24-hour cache without a new paid call", async () => {
+    const e = env({ SERPAPI_KEY: "SERP-SECRET" });
+    await search({ query: "black boots", country: "be" }, e);
+    const before = upstream.filter((c) => c.serp).length;
+    const counters = [...e.USAGE.map.keys()].filter((k) => !k.startsWith("prices:")).map((k) => e.USAGE.map.get(k));
+    const again = await (await search({ query: "Black  Boots", country: "be" }, e)).json();
+    expect(again.cached).toBe(true);
+    expect(upstream.filter((c) => c.serp).length).toBe(before);
+    expect([...e.USAGE.map.keys()].filter((k) => !k.startsWith("prices:")).map((k) => e.USAGE.map.get(k))).toEqual(counters);
+  });
+
+  it("refuses searches that are not about clothing", async () => {
+    topicVerdict = false;
+    const res = await search({ query: "cheap flights to rome", country: "be" }, env({ SERPAPI_KEY: "k" }));
+    expect(res.status).toBe(422);
+    expect(upstream.some((c) => c.serp)).toBe(false);
+  });
+
+  it("keeps searches inside the shared monthly budget", async () => {
+    const e = env({ SERPAPI_KEY: "k", MONTHLY_SEARCH_BUDGET: "1" });
+    expect((await search({ query: "white sneakers" }, e)).status).toBe(200);
+    expect((await search({ query: "grey hoodie" }, e)).status).toBe(429);
+  });
+});
+
 describe("limits", () => {
   it("enforces per-person daily limits separately for text and images", async () => {
     const e = env({ DAILY_TEXT_LIMIT: "2", DAILY_IMAGE_LIMIT: "1" });
@@ -270,7 +340,7 @@ describe("limits", () => {
     expect((await image()).status).toBe(429);
     expect((await image("zzz999")).status).toBe(200);
     const status = await (await worker.fetch(call("/status", null, { method: "GET" }), e)).json();
-    expect(status).toEqual({ user: "huy", remaining: { text: 0, image: 0 } });
+    expect(status).toEqual({ user: "huy", remaining: { text: 0, image: 0, search: 20 }, features: { prices: false } });
   });
 
   it("enforces the shared monthly image budget", async () => {

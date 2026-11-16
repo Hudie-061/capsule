@@ -1,7 +1,7 @@
 // Capsule proxy — a Cloudflare Worker that holds the owner's Gemini API key.
 //
 // It is NOT a general Gemini pass-through. It exposes only the wardrobe tasks the
-// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette), builds every prompt
+// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette, prices), builds every prompt
 // itself, pins the models, constrains outputs with JSON schemas, clips all user text,
 // and checks that free text sent to the image model is about clothing. Someone who
 // has an access code still cannot use it as a chatbot or a general image generator.
@@ -9,7 +9,9 @@
 // Secrets (wrangler secret put ... or Cloudflare dashboard → Settings → Variables and Secrets):
 //   GEMINI_API_KEY   – key from Google AI Studio (project with the AI Pro credits)
 //   ACCESS_CODES     – "name:code,name2:code2"
-// Vars: ALLOWED_ORIGINS, TEXT_MODEL, IMAGE_MODEL, DAILY_TEXT_LIMIT, DAILY_IMAGE_LIMIT, MONTHLY_IMAGE_BUDGET
+//   SERPAPI_KEY      – optional; turns on price search (serpapi.com, Google Shopping)
+// Vars: ALLOWED_ORIGINS, TEXT_MODEL, IMAGE_MODEL, DAILY_TEXT_LIMIT, DAILY_IMAGE_LIMIT, MONTHLY_IMAGE_BUDGET,
+//       DAILY_SEARCH_LIMIT, MONTHLY_SEARCH_BUDGET
 // KV binding: USAGE
 
 const GEMINI = "https://generativelanguage.googleapis.com";
@@ -23,7 +25,7 @@ const list = (value) => String(value || "").split(",").map((s) => s.trim()).filt
 const int = (value, fallback) => (Number.isFinite(Number.parseInt(value, 10)) ? Number.parseInt(value, 10) : fallback);
 
 class TaskError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, code) { super(message); this.status = status; this.code = code; }
 }
 
 // "https://name.github.io/" and "https://Name.github.io" both mean the origin https://name.github.io.
@@ -83,7 +85,11 @@ async function bump(env, key, ttl) {
   try { await env.USAGE.put(key, String((await count(env, key)) + 1), { expirationTtl: ttl }); }
   catch (error) { console.error("capsule-proxy: usage counter not saved", key, error?.message || error); }
 }
-const limits = (env) => ({ text: int(env.DAILY_TEXT_LIMIT, 150), image: int(env.DAILY_IMAGE_LIMIT, 25), monthlyImages: int(env.MONTHLY_IMAGE_BUDGET, 140) });
+const limits = (env) => ({
+  text: int(env.DAILY_TEXT_LIMIT, 150), image: int(env.DAILY_IMAGE_LIMIT, 25), search: int(env.DAILY_SEARCH_LIMIT, 20),
+  // Shared by everyone per calendar month. 240 searches stay inside SerpApi's free 250.
+  monthly: { image: int(env.MONTHLY_IMAGE_BUDGET, 140), search: int(env.MONTHLY_SEARCH_BUDGET, 240) },
+});
 const models = (env) => ({ text: env.TEXT_MODEL || "gemini-3.1-flash-lite", image: env.IMAGE_MODEL || "gemini-3.1-flash-image" });
 
 // ---------------------------------------------------------------- input hygiene
@@ -121,7 +127,7 @@ function kind(value) {
   return text(value, 24).toLowerCase().replace(/[^a-z -]/g, "").trim();
 }
 
-const PROFILE_KEYS = ["gender", "height", "weight", "build", "goal", "styles", "fits", "palette", "avoid", "notes"];
+const PROFILE_KEYS = ["gender", "height", "weight", "build", "sizes", "goal", "places", "styles", "fits", "palette", "avoid", "notes"];
 function profile(value) {
   const v = value && typeof value === "object" ? value : {};
   return Object.fromEntries(PROFILE_KEYS.map((k) => [k, text(v[k], 160)]));
@@ -272,7 +278,7 @@ function catalog(items) {
 }
 
 function profileText(p) {
-  const labels = { gender: "Gender", height: "Height", weight: "Weight", build: "Build", goal: "Goal for outfits", styles: "Preferred styles", fits: "Preferred fits", palette: "Palette that suits them", avoid: "Never suggest", notes: "Other notes" };
+  const labels = { gender: "Gender", sizes: "Clothing sizes", height: "Height", weight: "Weight", build: "Build", goal: "Goal for outfits", places: "Usually dresses for", styles: "Preferred styles", fits: "Preferred fits", palette: "Palette that suits them", avoid: "Never suggest", notes: "Other notes" };
   const lines = PROFILE_KEYS.filter((k) => p[k]).map((k) => `- ${labels[k]}: ${p[k]}`);
   return lines.length ? quote(lines.join("\n")) : "- (no profile yet)";
 }
@@ -340,6 +346,66 @@ const LEARN_SCHEMA = {
   properties: { aboutClothing: { type: "BOOLEAN" }, rules: { type: "ARRAY", items: { type: "STRING" } }, remembered: { type: "STRING" } },
   required: ["aboutClothing", "rules", "remembered"],
 };
+
+// ---------------------------------------------------------------- price search
+// Google Shopping through SerpApi, one country at a time. Results are cached in KV for 24 hours, so
+// repeated looks at the same piece are free and do not count against the limits.
+const COUNTRIES = { be: "EUR", nl: "EUR", fr: "EUR", de: "EUR", lu: "EUR", at: "EUR", es: "EUR", it: "EUR", pt: "EUR", ie: "EUR", pl: "PLN", gb: "GBP", us: "USD" };
+const USED_SOURCES = /vinted|2dehands|2ememain|marktplaats|leboncoin|kleinanzeigen|ebay|vestiaire|depop|wallapop|subito|olx|thredup|poshmark|grailed|sellpy|zalando lounge pre-owned/i;
+const USED_WORDS = /\b(used|pre-?owned|second ?hand|tweedehands|seconde main|d'occasion|gebraucht|usato|usado|u\u017cywan)/i;
+const MONEY = /(?:([€$£]|eur|usd|gbp|pln|z\u0142)\s?(\d+(?:[.,]\d{1,2})?))|(?:(\d+(?:[.,]\d{1,2})?)\s?([€$£]|eur|usd|gbp|pln|z\u0142))/i;
+
+// "Free delivery" → 0, "+€4,99 delivery" → 4.99, "Delivery by Nov 20" → null (unknown, not 20).
+function deliveryCost(value) {
+  const s = String(value || "");
+  if (!s) return null;
+  if (/free|gratis|gratuit|kostenlos|gratuito|darmow/i.test(s)) return 0;
+  const m = s.replace(/\u00a0/g, " ").match(MONEY);
+  return m ? Number((m[2] || m[3]).replace(",", ".")) : null;
+}
+
+const httpsUrl = (value) => (typeof value === "string" && /^https:\/\//i.test(value) ? value.slice(0, 1000) : "");
+
+function priceRequest(input) {
+  const query = text(input?.query, 100).replace(/[^\p{L}\p{N} '-]/gu, " ").replace(/\s+/g, " ").trim();
+  if (!query) return null;
+  const country = Object.hasOwn(COUNTRIES, input?.country) ? input.country : "be";
+  return { query, country, currency: COUNTRIES[country] };
+}
+
+async function priceKey(req) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${req.country}|${req.query.toLowerCase()}`));
+  return `prices:v1:${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function normalizeOffers(results) {
+  const seen = new Set();
+  const offers = [];
+  for (const r of (Array.isArray(results) ? results : []).slice(0, 60)) {
+    const price = typeof r?.extracted_price === "number" ? r.extracted_price : deliveryCost(r?.price);
+    const link = httpsUrl(r?.product_link) || httpsUrl(r?.link);
+    if (!price || price <= 0 || !link || seen.has(link)) continue;
+    seen.add(link);
+    const store = text(r.source, 60) || "Магазин";
+    const title = text(r.title, 140);
+    const delivery = r.delivery ? deliveryCost(r.delivery) : null;
+    const used = Boolean(r.second_hand_condition) || USED_SOURCES.test(store) || USED_WORDS.test(title);
+    offers.push({
+      title, store, link, image: httpsUrl(r.thumbnail),
+      price: Math.round(price * 100) / 100,
+      delivery, total: Math.round((price + (delivery || 0)) * 100) / 100,
+      condition: used ? "used" : "new",
+      rating: typeof r.rating === "number" ? r.rating : null,
+    });
+  }
+  return offers.sort((a, b) => a.total - b.total).slice(0, 12);
+}
+
+// The search key is paid per query, so only clothing searches go through.
+async function requireClothingQuery(env, query) {
+  const verdict = await askJson(env, `Is the following text a product search query for clothing, shoes or fashion accessories (bags, jewellery, watches, glasses, belts, hats)? Answer false for anything else.\n${quote(query)}`, TOPIC_SCHEMA, { temperature: 0 });
+  if (verdict.onTopic !== true) throw new TaskError(422, "Искать можно только одежду, обувь и аксессуары.");
+}
 
 // ---------------------------------------------------------------- tasks
 const TASKS = {
@@ -489,6 +555,34 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
     },
   },
 
+  prices: {
+    kind: "search",
+    // A cached answer is returned before any limit check and costs nothing.
+    async peek(env, input) {
+      const req = priceRequest(input);
+      if (!req) return null;
+      try {
+        const cached = await env.USAGE.get(await priceKey(req));
+        return cached ? { ...JSON.parse(cached), cached: true } : null;
+      } catch { return null; }
+    },
+    async run(env, input) {
+      if (!env.SERPAPI_KEY) throw new TaskError(503, "Поиск цен ещё не подключён — владелец добавит ключ. Пока можно искать по ссылкам на магазины.", "prices_not_configured");
+      const req = priceRequest(input);
+      if (!req) throw new TaskError(400, "query is required");
+      await requireClothingQuery(env, req.query);
+      const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
+      url.search = new URLSearchParams({ engine: "google_shopping", q: req.query, gl: req.country, hl: "en", api_key: env.SERPAPI_KEY }).toString();
+      const response = await fetch(url.toString());
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) throw new TaskError(502, `Поиск цен не ответил${data.error ? `: ${text(data.error, 120)}` : ""}. Попробуй позже.`);
+      const result = { query: req.query, country: req.country, currency: req.currency, offers: normalizeOffers(data.shopping_results), at: new Date().toISOString() };
+      try { await env.USAGE.put(await priceKey(req), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 }); }
+      catch (error) { console.error("capsule-proxy: price cache not saved", error?.message || error); }
+      return result;
+    },
+  },
+
   learn: {
     kind: "text",
     async run(env, input) {
@@ -556,7 +650,12 @@ async function handle(request, env, { headers, origin, allowed }) {
 
   if (request.method === "GET" && url.pathname === "/status") {
     const [t, i, m] = await Promise.all([count(env, `${day()}:${user}:text`), count(env, `${day()}:${user}:image`), count(env, `${month()}:all:image`)]);
-    return json({ user, remaining: { text: Math.max(0, limit.text - t), image: Math.max(0, Math.min(limit.image - i, limit.monthlyImages - m)) } }, 200, headers);
+    const [s, ms] = await Promise.all([count(env, `${day()}:${user}:search`), count(env, `${month()}:all:search`)]);
+    return json({
+      user,
+      remaining: { text: Math.max(0, limit.text - t), image: Math.max(0, Math.min(limit.image - i, limit.monthly.image - m)), search: Math.max(0, Math.min(limit.search - s, limit.monthly.search - ms)) },
+      features: { prices: Boolean(env.SERPAPI_KEY) },
+    }, 200, headers);
   }
 
   const match = url.pathname.match(/^\/api\/(\w+)$/);
@@ -570,12 +669,20 @@ async function handle(request, env, { headers, origin, allowed }) {
   try { input = JSON.parse(raw); } catch { return json({ error: "Expected JSON" }, 400, headers); }
   if (!input || typeof input !== "object") return json({ error: "Expected JSON object" }, 400, headers);
 
-  const dayKey = `${day()}:${user}:${task.kind}`;
-  if ((await count(env, dayKey)) >= limit[task.kind]) {
-    return json({ error: task.kind === "image" ? "Дневной лимит картинок исчерпан. Попробуй завтра." : "Дневной лимит запросов исчерпан. Попробуй завтра." }, 429, headers);
+  if (task.peek) {
+    const hit = await task.peek(env, input);
+    if (hit) return json(hit, 200, headers);
   }
-  if (task.kind === "image" && (await count(env, `${month()}:all:image`)) >= limit.monthlyImages) {
-    return json({ error: "Общий месячный лимит картинок исчерпан. Напиши владельцу приложения." }, 429, headers);
+
+  const dayKey = `${day()}:${user}:${task.kind}`;
+  const monthKey = `${month()}:all:${task.kind}`;
+  if ((await count(env, dayKey)) >= limit[task.kind]) {
+    const what = { image: "картинок", search: "поисков цен" }[task.kind] || "запросов";
+    return json({ error: `Дневной лимит ${what} исчерпан. Попробуй завтра.` }, 429, headers);
+  }
+  if (limit.monthly[task.kind] !== undefined && (await count(env, monthKey)) >= limit.monthly[task.kind]) {
+    const what = task.kind === "image" ? "картинок" : "поисков цен";
+    return json({ error: `Общий месячный лимит ${what} исчерпан. Напиши владельцу приложения.` }, 429, headers);
   }
 
   let result;
@@ -584,9 +691,9 @@ async function handle(request, env, { headers, origin, allowed }) {
   } catch (error) {
     const status = error instanceof TaskError ? error.status : 500;
     if (status === 500) console.error(`capsule-proxy: task ${match[1]} failed`, error?.stack || error);
-    return json({ error: status === 500 ? "Внутренняя ошибка сервера" : error.message }, status, headers);
+    return json({ error: status === 500 ? "Внутренняя ошибка сервера" : error.message, ...(error.code ? { code: error.code } : {}) }, status, headers);
   }
   await bump(env, dayKey, 60 * 60 * 48);
-  if (task.kind === "image") await bump(env, `${month()}:all:image`, 60 * 60 * 24 * 40);
+  if (limit.monthly[task.kind] !== undefined) await bump(env, monthKey, 60 * 60 * 24 * 40);
   return json(result, 200, headers);
 }

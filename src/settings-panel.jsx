@@ -5,21 +5,12 @@ import { clearTryOns, getPalette, getTiming } from "./lib/daily.js";
 import { checkConnection } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
 import { clearFeedback, EMPTY_PROFILE, getFeedback, getLearned, getModelReference, getProfile, getSettings, saveLearned, saveProfile, saveSettings, setModelReference } from "./lib/settings.js";
+import { COUNTRIES } from "./lib/countries.js";
+import { getBody, sizesSummary } from "./lib/sizes.js";
+import { AVOID, FITS, GENDERS, GOALS, PLACES, STYLES, genderLabel, joinList, splitList } from "./lib/style-options.js";
 import { Icon } from "./ui.jsx";
 
-const PROFILE_FIELDS = [
-  ["height", "Рост", "185 см"],
-  ["weight", "Вес", "80 кг"],
-  ["build", "Телосложение", "спортивное, широкие плечи"],
-  ["goal", "Чего хочу от образов", "подчеркнуть фигуру"],
-  ["styles", "Любимые стили", "street, немного sport"],
-  ["fits", "Любимые фасоны", "оверсайз верх, бэгги с высокой посадкой"],
-  ["palette", "Цвета, которые идут", "кремовый, бежевый, серый"],
-  ["avoid", "Никогда не предлагать", "узкие штаны, индиго-деним"],
-  ["notes", "Что ещё учесть", "хожу на учёбу и в зал"],
-];
 const TIMING_LABEL = { morning: "Утром, на сегодня", evening: "С вечера, на завтра", both: "Оба раза" };
-const GENDERS = [["male", "Мужчина"], ["female", "Женщина"], ["", "Не указывать"]];
 
 const top = (counts, n) => [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
 const tally = (values) => values.reduce((map, v) => map.set(v, (map.get(v) || 0) + 1), new Map());
@@ -42,7 +33,7 @@ function KnowledgeCard({ items, feedback, learned, onShowRules }) {
       <div className="knowledge__stats">
         <span><b>{items.length}</b>вещей</span>
         <span><b>{feedback.length}</b>оценок</span>
-        <span><b>{liked.length}</b>понравилось</span>
+        <span><b>{liked.length}</b>лайков</span>
         <span><b>{learned.length}</b>правил</span>
       </div>
       {loves.length > 0 && <p><span className="knowledge__key">Любишь</span>{loves.join(", ")}</p>}
@@ -51,6 +42,47 @@ function KnowledgeCard({ items, feedback, learned, onShowRules }) {
       {left > 0 && (loves.length > 0 || avoids.length > 0) && <p className="knowledge__muted">Ещё {left} {left === 1 ? "оценка" : left < 5 ? "оценки" : "оценок"} — и подбор станет заметно точнее.</p>}
       {learned.length > 0 && <button type="button" className="text-button text-button--dark" onClick={onShowRules}>Правила стилиста ({learned.length})</button>}
     </div>
+  );
+}
+
+// Chips for known answers plus the user's own words (kept as extra chips).
+function ChipsField({ label, options, value, onChange }) {
+  const chosen = splitList(value);
+  const custom = chosen.filter((v) => !options.includes(v));
+  const [draft, setDraft] = useState("");
+  const [adding, setAdding] = useState(false);
+  const toggle = (option) => onChange(joinList(chosen.includes(option) ? chosen.filter((v) => v !== option) : [...chosen, option]));
+  const add = () => { if (draft.trim()) onChange(joinList([...chosen, draft.trim()])); setDraft(""); setAdding(false); };
+  return (
+    <div className="chips-field">
+      <span className="chips-field__label">{label}</span>
+      <div className="chip-row">
+        {[...options, ...custom].map((o) => {
+          const on = chosen.includes(o);
+          return <button type="button" key={o} className={`chip${on ? " is-on" : ""}`} aria-pressed={on} onClick={() => toggle(o)}>{on && <Icon name="check" size={14} width={2.6} />}{o}</button>;
+        })}
+        {adding ? (
+          <span className="chip-input"><input autoFocus value={draft} maxLength={40} placeholder="Своё" onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }} onBlur={add} /></span>
+        ) : <button type="button" className="chip chip--add" onClick={() => setAdding(true)}><Icon name="plus" size={14} width={2.4} /> своё</button>}
+      </div>
+    </div>
+  );
+}
+
+// «Ты»: who the stylist dresses, with sizes. Opens the measurements screen with the 3D body.
+function YouCard({ profile, body, onOpen }) {
+  const facts = [profile.gender ? genderLabel(profile.gender) : "", profile.height, profile.weight].filter(Boolean).join(" · ");
+  const sizes = sizesSummary(body);
+  return (
+    <button type="button" className="you-card rise" onClick={onOpen}>
+      <span className="you-card__avatar"><Icon name="ruler" size={24} /></span>
+      <span className="you-card__text">
+        <span className="you-card__label">Ты</span>
+        <span className="strong-text">{facts || "Пол, рост и мерки"}</span>
+        <span className="tiny-text">{sizes ? `Размеры: ${sizes}` : "Добавь мерки — подберу размер и покажу 3D-фигуру"}</span>
+      </span>
+      <Icon name="chevron" size={20} width={2} />
+    </button>
   );
 }
 
@@ -64,6 +96,8 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
   const [palette, setPalette] = useState(null);
   const [timing, setTiming] = useState(null);
   const [feedback, setFeedback] = useState([]);
+  const [body, setBody] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(focus === "access");
   const fileRef = useRef(null);
   const accessRef = useRef(null);
   const rulesRef = useRef(null);
@@ -75,11 +109,12 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
     getPalette().then(setPalette);
     getTiming().then(setTiming);
     getFeedback().then(setFeedback);
+    getBody().then(setBody);
     getModelReference().then((blob) => setReference(blob ? URL.createObjectURL(blob) : null));
   }, []);
 
   useEffect(() => {
-    if (focus === "access" && settings) accessRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (focus === "access" && settings) { setSettingsOpen(true); setTimeout(() => accessRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }
   }, [focus, settings]);
 
   if (!settings) return null;
@@ -95,7 +130,7 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
     try {
       await saveAccess();
       const value = await checkConnection();
-      setChecking({ tone: "ok", text: `Работает. Привет, ${value.user}! Сегодня осталось: картинок ${value.remaining.image}, запросов ${value.remaining.text}.` });
+      setChecking({ tone: "ok", text: `Работает. Привет, ${value.user}! Сегодня осталось: картинок ${value.remaining.image}, запросов ${value.remaining.text}${value.features ? `, поиск цен ${value.features.prices ? `включён (${value.remaining.search})` : "пока не подключён"}` : ""}.` });
     } catch (e) {
       setChecking({ tone: "error", text: e.message });
     }
@@ -118,6 +153,8 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
 
       <KnowledgeCard items={items} feedback={feedback} learned={learned} onShowRules={() => rulesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} />
 
+      <YouCard profile={profile} body={body || (Number.parseInt(profile.height, 10) ? { gender: profile.gender, height: Number.parseInt(profile.height, 10), weight: Number.parseInt(profile.weight, 10) || 70 } : null)} onOpen={() => onOpen("sizes")} />
+
       <button type="button" className="palette-teaser rise" onClick={() => onOpen("palette")}>
         <span className="palette-teaser__text">
           <span className="palette-teaser__label">Моя палитра</span>
@@ -137,24 +174,19 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
 
       <div className="panel rise" style={{ animationDelay: ".08s" }}>
         <h2 className="panel__title">Мой стиль</h2>
-        <p className="muted-text">Стилист учитывает это при каждом подборе. Можно писать как угодно, своими словами.</p>
-        <div className="field-v2">
-          <span>Кто ты</span>
-          <div className="choice-row" role="radiogroup" aria-label="Пол">
-            {GENDERS.map(([id, label]) => <button type="button" role="radio" key={id || "none"} aria-checked={(profile.gender || "") === id} className={`filter-pill${(profile.gender || "") === id ? " is-on" : ""}`} onClick={() => setProfile({ ...profile, gender: id })}>{label}</button>)}
-          </div>
-        </div>
+        <p className="muted-text">Отметь, что нравится. Стилист учитывает это в каждом образе и в покупках.</p>
+        <ChipsField label="Стили" options={STYLES} value={profile.styles} onChange={(v) => setProfile({ ...profile, styles: v })} />
+        <ChipsField label="Фасоны" options={FITS} value={profile.fits} onChange={(v) => setProfile({ ...profile, fits: v })} />
+        <ChipsField label="Чего хочу от образов" options={GOALS} value={profile.goal} onChange={(v) => setProfile({ ...profile, goal: v })} />
+        <ChipsField label="Куда хожу чаще всего" options={PLACES} value={profile.places} onChange={(v) => setProfile({ ...profile, places: v })} />
+        <ChipsField label="Никогда не предлагать" options={AVOID} value={profile.avoid} onChange={(v) => setProfile({ ...profile, avoid: v })} />
         <div className="form-grid">
-          {PROFILE_FIELDS.map(([key, label, placeholder]) => (
-            <label className="field-v2" key={key}>
-              <span>{label}</span>
-              <input value={profile[key] || ""} placeholder={placeholder} onChange={(e) => setProfile({ ...profile, [key]: e.target.value })} />
-            </label>
-          ))}
+          <label className="field-v2"><span>Цвета, которые идут <small>заполнит «Моя палитра»</small></span><input value={profile.palette || ""} placeholder="кремовый, бежевый, серый" onChange={(e) => setProfile({ ...profile, palette: e.target.value })} /></label>
+          <label className="field-v2"><span>Что ещё учесть</span><input value={profile.notes || ""} placeholder="ношу очки, люблю карманы" onChange={(e) => setProfile({ ...profile, notes: e.target.value })} /></label>
         </div>
         <div className="row-gap">
-          <button type="button" className="btn btn--dark btn--small" onClick={async () => { await saveProfile(profile); onToast?.("Профиль сохранён"); }}><Icon name="check" size={16} width={2.2} /> Сохранить</button>
-          <button type="button" className="btn btn--outline btn--small" onClick={async () => { if (window.confirm("Стереть все оценки образов?")) { await clearFeedback(); onToast?.("Оценки стёрты"); } }}>Сбросить оценки</button>
+          <button type="button" className="btn btn--dark btn--small" onClick={async () => { await saveProfile(profile); onToast?.("Стиль сохранён — учту в следующих образах"); }}><Icon name="check" size={16} width={2.2} /> Сохранить</button>
+          <button type="button" className="btn btn--outline btn--small" onClick={async () => { if (window.confirm("Стереть все оценки образов?")) { await clearFeedback(); setFeedback([]); onToast?.("Оценки стёрты"); } }}>Сбросить оценки</button>
         </div>
       </div>
 
@@ -171,6 +203,20 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
         <div className="inline-form">
           <input value={newRule} placeholder="Например: не предлагать белые кроссовки" onChange={(e) => setNewRule(e.target.value)} />
           <button type="button" className="btn btn--outline btn--small" onClick={async () => { if (!newRule.trim()) return; setLearned(await saveLearned([...learned, newRule])); setNewRule(""); }}>Добавить</button>
+        </div>
+      </div>
+
+      <button type="button" className={`settings-toggle${settingsOpen ? " is-open" : ""}`} aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
+        <span><span className="strong-text">Настройки</span><span className="tiny-text">Страна для покупок, фото для примерки, доступ</span></span>
+        <Icon name="chevron" size={20} width={2} />
+      </button>
+
+      {settingsOpen && (<>
+      <div className="panel rise">
+        <h2 className="panel__title">Страна для покупок</h2>
+        <p className="muted-text">Где искать цены с доставкой и сайты б/у.</p>
+        <div className="chip-row">
+          {COUNTRIES.map((c) => <button type="button" key={c.id} className={`chip${settings.country === c.id ? " is-on" : ""}`} aria-pressed={settings.country === c.id} onClick={async () => setSettings(await saveSettings({ country: c.id }))}>{settings.country === c.id && <Icon name="check" size={14} width={2.6} />}{c.name}</button>)}
         </div>
       </div>
 
@@ -201,6 +247,7 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
         {checking.text && <p className={`status-line${checking.tone ? ` status-line--${checking.tone}` : ""}`} role="status">{checking.text}</p>}
         <p className="tiny-text">Адрес этого приложения: {window.location.origin}</p>
       </div>
+      </>)}
 
       {onRestartOnboarding && <button type="button" className="text-button center-text restart-link" onClick={onRestartOnboarding}>Пройти знакомство заново</button>}
     </section>

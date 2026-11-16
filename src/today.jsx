@@ -8,6 +8,7 @@ import { normalizeImage } from "./lib/image.js";
 import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
 import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, saveLearned, setModelReference } from "./lib/settings.js";
 import { learnFromComment, planOutfits } from "./lib/stylist.js";
+import { kindOf } from "./lib/kinds.js";
 import { GarmentIcon, Icon, Segmented, Sheet, isDressItem } from "./ui.jsx";
 
 const LIKE_REASONS = ["Общий вайб", "Сочетание цветов", "Подчёркивает фигуру", "Удобно на каждый день"];
@@ -23,6 +24,12 @@ const DISLIKE_REASONS = ["Не мой стиль", "Цвета не сочета
 const OCCASION_CHIPS = ["Учёба", "Работа", "Спорт", "Свидание", "Дождь", "Холодно", "Тепло"];
 const PART_ORDER = { wholebody_up: 0, upperbody: 1, lowerbody: 2, shoes: 3, accessories_up: 4 };
 const SWAP_TITLE = { wholebody_up: "Заменить верхнюю одежду", upperbody: "Заменить верх", lowerbody: "Заменить низ", shoes: "Заменить обувь", accessories_up: "Заменить аксессуар" };
+
+// Outerwear (not a dress), and the layers people take off indoors: a coat over a top, scarves, headwear.
+const isOuter = (p) => p.part === "wholebody_up" && !isDressItem(p);
+const isOutdoorLayer = (p, pieces) => (isOuter(p) && pieces.some((q) => q.part === "upperbody")) || (p.part === "accessories_up" && ["scarf", "cap", "hat", "beanie"].includes(kindOf(p)));
+// A piece can be left out when what remains is still a full outfit.
+const canRemove = (p, pieces) => (isOuter(p) || p.part === "accessories_up") && isWearable(pieces.filter((q) => q.id !== p.id));
 
 function isWearable(pieces) {
   const parts = pieces.map((p) => p.part);
@@ -41,7 +48,7 @@ function cleanPlan(plan, byId) {
 
 // ---- mannequin with callouts --------------------------------------------------------------
 // Coordinates of the 600×1000 canvas from lib/mannequin.js, drawn inside a 320×300 box.
-const BOX = { w: 320, h: 300, fx: 76, fy: 10, scale: 0.28, label: 99 }; // label = 31% of the box, as in v2.css
+const BOX = { w: 320, h: 340, fx: 64, fy: 8, scale: 0.32, label: 99 }; // label = 31% of the box, as in v2.css
 // Callout labels sit at the sides; each line points at the item's own place on the figure.
 function callouts(pieces, body) {
   const byId = new Map(pieces.map((p) => [p.id, p]));
@@ -116,6 +123,8 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const [likeReasons, setLikeReasons] = useState(new Set());
   const [zoom, setZoom] = useState(null);
   const [lastLiked, setLastLiked] = useState("");
+  const [indoor, setIndoor] = useState(false); // mannequin without coat, scarf and hat
+  const [adding, setAdding] = useState(false); // sheet for putting outerwear back
   const photoRef = useRef(null);
   const ticketRef = useRef(0); // ignores a slow plan request after the day was switched
   const [figure, setFigure] = useState({}); // gender, height, weight from the profile shape the mannequin
@@ -131,6 +140,10 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const outfit = plan?.outfits?.[plan.index] || null;
   const pieces = useMemo(() => (outfit ? outfit.itemIds.map((id) => byId.get(id)).filter(Boolean).sort((a, b) => (PART_ORDER[a.part] ?? 9) - (PART_ORDER[b.part] ?? 9)) : []), [outfit, byId]);
   const piecesKey = pieces.map((p) => p.id).join("+");
+  const outdoor = pieces.filter((p) => isOutdoorLayer(p, pieces));
+  const shown = indoor ? pieces.filter((p) => !outdoor.includes(p)) : pieces;
+  const shownKey = shown.map((p) => p.id).join("+");
+  const missingOuter = Boolean(outfit) && !pieces.some(isOuter) && pieces.some((p) => p.part === "upperbody") && items.some(isOuter);
 
   useEffect(() => { getTiming().then((t) => setMode(defaultMode(t))); }, []);
   useEffect(() => { getProfile().then((p) => setFigure({ gender: p.gender, height: p.height, weight: p.weight })); }, []);
@@ -188,10 +201,10 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   useEffect(() => {
     if (!flipped || !pieces.length) return undefined;
     let alive = true;
-    renderOutfit(pieces, { tuck: outfit?.tuck, ...figure }).then((url) => alive && setBoard(url)).catch(() => alive && setBoard(null));
+    renderOutfit(shown, { tuck: outfit?.tuck, ...figure }).then((url) => alive && setBoard(url)).catch(() => alive && setBoard(null));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, piecesKey, outfit?.tuck, figure]);
+  }, [flipped, shownKey, outfit?.tuck, figure]);
 
   // Cached try-on for this exact set of pieces.
   useEffect(() => {
@@ -259,6 +272,15 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     await store({ ...plan, outfits, chosen: null });
     setLikeAt(null);
   };
+
+  const changePieces = async (update) => {
+    if (!plan || !outfit) return;
+    const outfits = plan.outfits.map((o, i) => (i === plan.index ? { ...o, itemIds: update(o.itemIds), edited: true } : o));
+    await store({ ...plan, outfits, chosen: null });
+    setLikeAt(null);
+  };
+  const removePiece = (id) => { setSwapId(null); changePieces((ids) => ids.filter((x) => x !== id)); };
+  const addPiece = (id) => { setAdding(false); changePieces((ids) => [...ids.filter((x) => x !== id), id]); };
 
   const runTryOn = async (file) => {
     setTryon({ status: "loading", url: null, error: "" });
@@ -371,7 +393,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                 <Icon name="person" size={20} width={1.9} /> На человеке
               </button>
             </div>
-            <div className="look-tiles" data-count={pieces.length}>
+            <div className="look-tiles" data-count={pieces.length + (missingOuter ? 1 : 0)}>
               {pieces.map((p, i) => (
                 <button type="button" key={p.id} className="look-tile rise" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => setSwapId(p.id)} aria-label={`Заменить: ${p.name}`}>
                   {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
@@ -379,6 +401,12 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                   <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>
                 </button>
               ))}
+              {missingOuter && (
+                <button type="button" className="look-tile look-tile--add rise" onClick={() => setAdding(true)} aria-label="Добавить верхнюю одежду">
+                  <Icon name="plus" size={28} width={1.6} />
+                  <span className="look-tile__name">Верхняя одежда</span>
+                </button>
+              )}
             </div>
             {outfit.why && <p className="look-card__why">{outfit.why}</p>}
           </section>
@@ -391,8 +419,13 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             <div className="stage">
               {!me && (
                 <>
-                  <Mannequin board={board} pieces={pieces} body={{ ...figure, tuck: outfit.tuck }} open={calloutsOpen} onToggle={() => setCalloutsOpen((v) => !v)} onPick={setSwapId} />
-                  <span className="stage__caption">{calloutsOpen ? "Нажми на вещь, чтобы заменить" : "Нажми на манекен — покажу вещи"}</span>
+                  <Mannequin board={board} pieces={shown} body={{ ...figure, tuck: outfit.tuck }} open={calloutsOpen} onToggle={() => setCalloutsOpen((v) => !v)} onPick={setSwapId} />
+                  {outdoor.length > 0 && (
+                    <button type="button" className={`stage__toggle${indoor ? " is-on" : ""}`} aria-pressed={indoor} onClick={() => setIndoor((v) => !v)}>
+                      <Icon name={indoor ? "check" : "home"} size={16} width={2.2} /> В помещении
+                    </button>
+                  )}
+                  <span className="stage__caption">{calloutsOpen ? "Нажми на вещь, чтобы заменить" : indoor ? "Без верхней одежды — как внутри" : "Нажми на манекен — покажу вещи"}</span>
                 </>
               )}
               {me && tryon.status === "done" && (
@@ -466,6 +499,15 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
 
       <Sheet open={Boolean(swapping)} onClose={() => setSwapId(null)} title={swapping ? (isDressItem(swapping) ? "Заменить платье" : SWAP_TITLE[swapping.part]) : ""} subtitle="Из твоего гардероба · той же категории">
         <div className="alt-grid">
+          {swapping && canRemove(swapping, pieces) && (
+            <button type="button" className="alt-card alt-card--none rise" onClick={() => removePiece(swapping.id)}>
+              <span className="alt-card__image alt-card__image--none"><Icon name="close" size={30} width={1.6} /></span>
+              <span className="alt-card__text">
+                <span className="strong-text">{isOuter(swapping) ? "Без верхней одежды" : "Без аксессуара"}</span>
+                <span className="tiny-text">{isOuter(swapping) ? "Сегодня без неё" : "Убрать из образа"}</span>
+              </span>
+            </button>
+          )}
           {alternatives.map((alt, i) => {
             const current = alt.id === swapping?.id;
             return (
@@ -488,6 +530,17 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           <span className="dark-link__text"><span>Нет подходящих? Найдём дешевле</span><small>Новое и б/у — в магазинах Бельгии</small></span>
           <Icon name="chevron" size={20} width={2} />
         </button>
+      </Sheet>
+
+      <Sheet open={adding} onClose={() => setAdding(false)} title="Добавить верхнюю одежду" subtitle="Из твоего гардероба">
+        <div className="alt-grid">
+          {items.filter(isOuter).map((alt, i) => (
+            <button type="button" key={alt.id} className="alt-card rise" style={{ animationDelay: `${i * 0.04}s` }} onClick={() => addPiece(alt.id)}>
+              <span className="alt-card__image">{alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}</span>
+              <span className="alt-card__text"><span className="strong-text">{alt.name}</span><span className="tiny-text">{[alt.brand, ...(alt.tags || []).slice(0, 2)].filter(Boolean).join(" · ") || " "}</span></span>
+            </button>
+          ))}
+        </div>
       </Sheet>
 
       <Sheet open={dislikeOpen} onClose={() => setDislikeOpen(false)} title="Почему не этот?" subtitle="Один тап — и стилист учтёт это в следующих образах">

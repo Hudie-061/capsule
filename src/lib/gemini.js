@@ -36,7 +36,12 @@ async function call(path, { method = "GET", body } = {}) {
   }
   const result = await response.json().catch(() => ({}));
   if (response.status === 401) throw new SetupError("Код доступа не подошёл. Проверь его в «Профиле» → «Доступ».");
-  if (!response.ok) throw new Error(typeof result.error === "string" ? result.error : `Ошибка сервера (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(typeof result.error === "string" ? result.error : `Ошибка сервера (${response.status})`);
+    error.status = response.status;
+    error.code = result.code; // e.g. "prices_not_configured"
+    throw error;
+  }
   return result;
 }
 
@@ -87,6 +92,11 @@ export async function gapsTask({ items, profile, feedback, learned }) {
 
 export async function learnTask({ comment, outfitItems, liked, rules }) {
   return task("learn", { comment, outfitItems: outfitItems.map(plainItem), liked, rules });
+}
+
+// Price search (Google Shopping via the Worker). Throws with code "prices_not_configured" until the owner adds a key.
+export async function pricesTask({ query, country }) {
+  return task("prices", { query, country });
 }
 
 export async function paletteTask(selfieBlob) {
