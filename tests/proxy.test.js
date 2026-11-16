@@ -49,7 +49,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url, init) => {
     if (String(url).includes("serpapi")) {
       upstream.push({ url: String(url), serp: true });
-      return new Response(JSON.stringify(serp), { status: 200 });
+      return new Response(JSON.stringify(typeof serp === "function" ? serp(new URL(String(url))) : serp), { status: 200 });
     }
     const body = JSON.parse(init.body);
     const prompt = body.contents[0].parts[0].text;
@@ -57,7 +57,7 @@ beforeEach(() => {
     if (url.includes("flash-image")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG.data } }] } }] }), { status: 200 });
     if (prompt.startsWith("Is the following user text") || prompt.startsWith("Is the following text a product search")) return reply({ onTopic: topicVerdict });
     if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
-    if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true }] });
+    if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true, tips: [{ title: "Тон в тон", why: "Оттенки синего вытягивают силуэт" }, { title: "", why: "пусто" }, { title: "a", why: "b" }, { title: "c", why: "d" }] }] });
     if (prompt.includes("recommend at most 6")) {
       return reply({ summary: "s", items: [
         { item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a", "a", "ghost"], part: "lowerbody", kind: "Jeans", color: "#2b3a55", query: "dark straight jeans?!" },
@@ -65,7 +65,13 @@ beforeEach(() => {
       ] });
     }
     if (prompt.includes("personal colour analysis")) {
-      return reply({ isPerson: paletteIsPerson, season: "Мягкая осень", undertone: "тёплый", contrast: "средний", best: [{ name: "Олива", hex: "#6f6b3e" }, { name: "Плохой", hex: "olive" }], avoid: [], metal: { name: "Золото", good: ["#c9a24a", "gold"], avoid: "silver" }, jewelry: [{ name: "Часы", note: "кожа" }] });
+      return reply({ isPerson: paletteIsPerson, season: "Мягкая осень", undertone: "тёплый", contrast: "средний", why: "Тёплая кожа, мягкий контраст", photoNote: "", traits: [{ label: "Подтон", value: "тёплый", why: "золотистая кожа" }, { label: "", value: "x", why: "y" }], best: [{ name: "Олива", hex: "#6f6b3e", why: "повторяет оттенок глаз" }, { name: "Плохой", hex: "olive", why: "x" }], avoid: [], metal: { name: "Золото", good: ["#c9a24a", "gold"], avoid: "silver" }, jewelry: [{ name: "Часы", note: "кожа" }] });
+    }
+    if (prompt.includes("A shopper wants to buy")) {
+      // keep only titles with the wanted word, like the real check would
+      const word = prompt.includes("blazer") ? "blazer" : "jeans";
+      const ids = [...prompt.matchAll(/^(\d+)\. (.*)$/gm)].filter((m) => m[2].toLowerCase().includes(word)).map((m) => Number(m[1]));
+      return reply({ ids });
     }
     if (prompt.includes("maintain a short memory")) {
       const aboutClothing = !prompt.includes("войн");
@@ -183,6 +189,8 @@ describe("no general-purpose access", () => {
     expect(prompt).toContain("Create 8 distinct"); // count capped
     expect(out.outfits[0].title.length).toBeLessThanOrEqual(60);
     expect(out.outfits[0].itemIds).toEqual(["a", "b"]); // unknown ids dropped
+    expect(out.outfits[0].tips).toEqual([{ title: "Тон в тон", why: "Оттенки синего вытягивают силуэт" }]); // at most 2, empty dropped
+    expect(upstream[0].prompt).toContain("HOW A STYLIST BUILDS AN OUTFIT");
   });
 
   it("blocks off-topic text before it reaches the image model and does not charge an image", async () => {
@@ -231,7 +239,10 @@ describe("no general-purpose access", () => {
     const out = await (await worker.fetch(call("/api/palette", { image: PNG }), env())).json();
     expect(upstream[0].prompt).toMatch(/ONLY to choose clothing colours/);
     expect(out.season).toBe("Мягкая осень");
-    expect(out.best).toEqual([{ name: "Олива", hex: "#6f6b3e" }]); // invalid hex dropped
+    expect(out.best).toEqual([{ name: "Олива", hex: "#6f6b3e", why: "повторяет оттенок глаз" }]); // invalid hex dropped
+    expect(out.why).toBe("Тёплая кожа, мягкий контраст");
+    expect(out.traits).toEqual([{ label: "Подтон", value: "тёплый", why: "золотистая кожа" }]); // empty label dropped
+    expect(upstream[0].prompt).toContain("12-season system");
     expect(out.metal).toEqual({ name: "Золото", good: ["#c9a24a"], avoid: "" });
     paletteIsPerson = false;
     const res = await worker.fetch(call("/api/palette", { image: PNG }), env());
@@ -326,6 +337,41 @@ describe("price search", () => {
     const zalando = out.offers.find((o) => o.store === "Zalando");
     expect(zalando).toMatchObject({ id: "101", price: 49.95, oldPrice: 59.95, token: "eyJlaSI6InRva2VuLWEifQ==" });
     expect(out.offers.find((o) => o.store === "Shop C").oldPrice).toBe(null);
+  });
+
+  it("searches each popular chain with its name, keeps only that chain's new offers, 2 each, the right type only", async () => {
+    const shelf = {
+      Zara: [
+        { title: "Navy wool blazer", source: "ZARA Belgium", product_id: "z1", immersive_product_page_token: "eyJ6YXJhLTEiOiIxIn0=", extracted_price: 139 },
+        { title: "Wool trousers navy", source: "ZARA Belgium", product_id: "z2", immersive_product_page_token: "eyJ6YXJhLTIiOiIxIn0=", extracted_price: 59.95 },
+        { title: "Textured blazer", source: "ZARA Belgium", product_id: "z3", immersive_product_page_token: "eyJ6YXJhLTMiOiIxIn0=", extracted_price: 99.95 },
+        { title: "Slim blazer navy", source: "ZARA Belgium", product_id: "z4", immersive_product_page_token: "eyJ6YXJhLTQiOiIxIn0=", extracted_price: 79.95 },
+        { title: "Zara blazer used", source: "Vinted", product_id: "z5", immersive_product_page_token: "eyJ6YXJhLTUiOiIxIn0=", extracted_price: 15 },
+      ],
+      "H&M": [
+        { title: "Regular Fit wool-blend blazer", source: "www2.hm.com/nl_be/index.html", product_id: "h1", immersive_product_page_token: "eyJobS0xIjoiMSJ9", extracted_price: 89.99 },
+        { title: "Navy blazer by another shop", source: "Boggi Milano", product_id: "h2", immersive_product_page_token: "eyJobS0yIjoiMSJ9", extracted_price: 399 },
+      ],
+    };
+    serp = (url) => ({ shopping_results: shelf[url.searchParams.get("q").startsWith("H&M") ? "H&M" : "Zara"] });
+    const e = env({ SERPAPI_KEY: "k" });
+    const res = await search({ query: "men navy wool blazer", country: "be", chains: ["zara", "hm", "spaceship"], want: { name: "Тёмно-синий блейзер", kind: "blazer", color: "#1f2a44" } }, e);
+    expect(res.status).toBe(200);
+    const out = await res.json();
+    expect(upstream.filter((c) => c.serp).map((c) => new URL(c.url).searchParams.get("q"))).toEqual(["Zara men navy wool blazer", "H&M men navy wool blazer"]);
+    expect(out.offers.map((o) => [o.store, o.title, o.total])).toEqual([
+      ["H&M", "Regular Fit wool-blend blazer", 89.99],
+      ["Zara", "Textured blazer", 99.95],
+      ["Zara", "Navy wool blazer", 139],
+    ]);
+    expect(out.searches).toBe(2);
+    expect(e.USAGE.map.get(`${new Date().toISOString().slice(0, 7)}:all:search`)).toBe("2"); // two paid searches from the monthly budget
+  });
+
+  it("drops results of another type from a search in all shops", async () => {
+    const out = await (await search({ query: "dark straight jeans", country: "be", want: { name: "Тёмные джинсы", kind: "jeans" } }, env({ SERPAPI_KEY: "k" }))).json();
+    expect(out.offers.every((o) => o.title.toLowerCase().includes("jeans"))).toBe(true);
+    expect(out.offers.map((o) => o.store)).not.toContain("Shop F");
   });
 
   it("keeps searches inside the shared monthly budget", async () => {

@@ -10,6 +10,7 @@ describe("popular chains", () => {
     expect(chainOf("UNIQLO Belgium")?.id).toBe("uniqlo");
     expect(chainOf("Foot Locker Belgium")?.id).toBe("footlocker");
     expect(chainOf("NEW YORKER")?.id).toBe("newyorker");
+    expect(chainOf("www2.hm.com/nl_be/index.html")?.id).toBe("hm"); // how Google Shopping names H&M in Belgium
     expect(chainOf("Zalando")).toBe(null);
     expect(chainOf("Mangopay shop")).toBe(null);
   });

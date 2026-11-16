@@ -9,7 +9,7 @@ import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
 import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, saveLearned, setModelReference } from "./lib/settings.js";
 import { learnFromComment, planOutfits } from "./lib/stylist.js";
 import { kindOf } from "./lib/kinds.js";
-import { GarmentIcon, Icon, Segmented, Sheet, isDressItem } from "./ui.jsx";
+import { GarmentIcon, HintChips, Icon, Segmented, Sheet, isDressItem } from "./ui.jsx";
 
 const LIKE_REASONS = ["Общий вайб", "Сочетание цветов", "Подчёркивает фигуру", "Удобно на каждый день"];
 // What the stylist takes from each tap, said back to the user right away.
@@ -409,6 +409,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
               )}
             </div>
             {outfit.why && <p className="look-card__why">{outfit.why}</p>}
+            <HintChips tips={outfit.tips} label="Советы стилиста к образу" />
           </section>
 
           <section className="look-card flip__face flip__back" aria-hidden={!flipped} inert={!flipped}>

@@ -95,8 +95,10 @@ export async function learnTask({ comment, outfitItems, liked, rules }) {
 }
 
 // Price search (Google Shopping via the Worker). Throws with code "prices_not_configured" until the owner adds a key.
-export async function pricesTask({ query, country }) {
-  return task("prices", { query, country });
+// `chains`: popular chains to search one by one (one paid search each); `want`: the piece, so the Worker
+// can drop offers of another type or colour.
+export async function pricesTask({ query, country, chains = [], want = null }) {
+  return task("prices", { query, country, chains, want });
 }
 
 // The product page on the shop's own site for one price offer (one search; the Worker caches it for a week).

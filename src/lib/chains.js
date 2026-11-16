@@ -16,13 +16,13 @@ const FOOTLOCKER = { be: "footlocker.be/nl", nl: "footlocker.nl/nl", fr: "footlo
 // `match` is tested against the shop name Google Shopping gives (`source`).
 // `own` = shown as a search link; the rest only count as popular when they appear in offers.
 export const CHAINS = [
-  { id: "zara", name: "Zara", match: /^zara\b/i, site: "zara.com", own: true,
+  { id: "zara", name: "Zara", match: /^zara\b|zara\.com/i, site: "zara.com", own: true,
     search: (c, s, g) => `https://www.zara.com/${c === "gb" ? "uk" : c}/${LANG[c]}/search?searchTerm=${q(s)}${g ? `&section=${g === "female" ? "WOMAN" : "MAN"}` : ""}` },
-  { id: "hm", name: "H&M", match: /^h\s*&\s*m\b|^h&amp;m\b/i, site: "hm.com", own: true,
+  { id: "hm", name: "H&M", match: /^h\s*&\s*m\b|^h&amp;m\b|(^|\.)hm\.com/i, site: "hm.com", own: true,
     search: (c, s) => (HM[c] ? `https://www2.hm.com/${HM[c]}/search-results.html?q=${q(s)}` : null) },
   { id: "uniqlo", name: "Uniqlo", match: /uniqlo/i, site: "uniqlo.com", own: true,
     search: (c, s) => (UNIQLO.has(c) ? `https://www.uniqlo.com/${c === "gb" ? "uk" : c}/${LANG[c]}/search?q=${q(s)}` : null) },
-  { id: "mango", name: "Mango", match: /^mango\b/i, site: "mango.com", own: true,
+  { id: "mango", name: "Mango", match: /^mango\b|mango\.com/i, site: "mango.com", own: true,
     search: (c, s, g) => (MANGO[c] ? `https://shop.mango.com/${c}/${MANGO[c][0]}/search/${g === "female" ? MANGO[c][2] : MANGO[c][1]}?q=${q(s)}` : null) },
   { id: "newyorker", name: "New Yorker", match: /new\s*yorker/i, site: "newyorker.de", own: true, search: () => null },
   { id: "footlocker", name: "Foot Locker", match: /foot\s*locker/i, site: "footlocker.com", own: true, shoes: true,
@@ -34,6 +34,11 @@ export const CHAINS = [
   { id: "jbc", name: "JBC", match: /^jbc\b/i, site: "jbc.be" },
   { id: "jd", name: "JD Sports", match: /^jd(\s*sports)?\b/i, site: "jdsports.com", shoes: true },
 ];
+
+// Chains searched one by one in «Популярные» (one paid search each, so four at most; ids match the Worker).
+export function searchChains(gap) {
+  return gap?.part === "shoes" ? ["footlocker", "zara", "hm", "mango"] : ["zara", "hm", "uniqlo", "mango"];
+}
 
 export const chainOf = (store) => CHAINS.find((c) => c.match.test(String(store || "").trim())) || null;
 

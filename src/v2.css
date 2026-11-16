@@ -188,6 +188,30 @@ button:disabled { cursor: default; }
 .look-card__title { font-family: var(--serif); font-size: 23px; line-height: 1.05; }
 .look-card__why { margin: 0; padding: 0 4px 2px; font-size: 13px; line-height: 1.4; color: var(--text-2); }
 
+/* Stylist notes: chips with a short explanation that opens on tap (outfits, palette traits). */
+.hint-chips { display: flex; flex-direction: column; gap: 8px; padding: 0 4px; }
+.hint-chips__row { display: flex; flex-wrap: wrap; gap: 6px; }
+.hint-chip {
+  display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--chip); color: var(--text-tag); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background .2s var(--ease), color .2s var(--ease);
+}
+.hint-chip b { font-weight: 700; }
+.hint-chip.is-on { background: var(--dark); color: var(--on-dark); border-color: var(--dark); }
+.hint-bubble {
+  position: relative; margin: 2px 0 0; padding: 10px 12px; border-radius: 14px; background: var(--dark); color: var(--on-dark);
+  font-size: 13px; line-height: 1.4; transform-origin: 20px 0;
+}
+.hint-bubble::before { content: ""; position: absolute; top: -6px; left: 18px; width: 12px; height: 12px; background: inherit; transform: rotate(45deg); border-radius: 2px; }
+.hint-chips--dark { padding: 0; }
+.hint-chips--dark .hint-chip { background: rgba(244, 239, 231, .08); border-color: rgba(244, 239, 231, .22); color: #E6DED2; padding: 4px 10px; gap: 4px; font-size: 12px; }
+.hint-chips--dark .hint-chip.is-on { background: #F4EFE7; color: #1E1B18; border-color: #F4EFE7; }
+.hint-chips--dark .hint-bubble { background: #F4EFE7; color: #1E1B18; }
+.palette-why { margin: 0; font-size: 13.5px; line-height: 1.45; color: #E6DED2; }
+.palette-note { margin: 0; font-size: 12.5px; line-height: 1.4; color: #E8B48F; }
+.swatch-why { margin: 2px 0 6px; font-size: 13px; line-height: 1.4; color: #E6DED2; }
+.swatch-why b { color: #F4EFE7; }
+
 .look-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .look-tile {
   height: 128px; border-radius: 18px; border: 0; background: var(--tile); position: relative; overflow: hidden;

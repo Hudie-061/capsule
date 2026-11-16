@@ -11,7 +11,7 @@
 // 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
 //    profile's height and weight) is added to the search; the chip turns it off.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { chainLinks, chainOffers, offerFallback, queryGender } from "./lib/chains.js";
+import { chainLinks, chainOffers, offerFallback, queryGender, searchChains } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
@@ -55,8 +55,8 @@ const discount = (offer) => (offer.oldPrice > offer.price ? Math.round((1 - offe
 const deliveryText = (offer, currency) => (offer.delivery === 0 ? "Бесплатная доставка" : offer.delivery ? `+${money(offer.delivery, currency)} доставка` : "Доставка уточняется на сайте");
 
 // Offers are kept on the device for a day, so going back and forth costs nothing.
-// v2: offers carry the token for the shop's own link, so older saved answers are not reused.
-const offersKey = (country, query) => `offers2:${country}:${query.toLowerCase()}`;
+// v3: «Популярные» and «все магазины» are separate searches, checked for the right type of piece.
+const offersKey = (country, mode, query) => `offers3:${country}:${mode}:${query.toLowerCase()}`;
 
 export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAccess, onOpenSizes }) {
   const [cache, setCache] = useState(null);
@@ -116,17 +116,23 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize }) : null;
   const sizable = gap ? Boolean(sizeForKind(kindOf(gap), { height: 175 })) : false;
   const baseQuery = gap ? gap.query || gap.item : "";
-  const query = size && sizeOn ? `${baseQuery} ${size.query}` : baseQuery; // to the Worker
-  const shownQuery = size && sizeOn ? `${baseQuery} ${size.shown}` : baseQuery; // to the user and shop links
+  // «Популярные» searches each chain without the size: in Google Shopping "size 50" pulls in second-hand
+  // listings that mention the size, and the chains show every size on the product page anyway.
+  // «Все новые» and «Б/у» search all shops once, with the size when the chip is on.
+  const mode = filter === "chains" ? "chains" : "all";
+  const sized = mode === "all" && size && sizeOn;
+  const query = sized ? `${baseQuery} ${size.query}` : baseQuery; // to the Worker
+  const shownQuery = sized ? `${baseQuery} ${size.shown}` : baseQuery; // to the user and shop links
   const place = countryById(country);
   const currency = offers.data?.currency || place.currency;
   const gender = queryGender(baseQuery, fit.body?.gender);
 
-  // Offers for the selected piece in the selected country.
+  // Offers for the selected piece in the selected country. «Популярные» spends one search per chain
+  // (cached for a day); the search in all shops runs only when «Все новые» or «Б/у» is opened.
   useEffect(() => {
-    if (!query || !country || !setupReady) return undefined;
+    if (!query || !country || !setupReady || !gap) return undefined;
     let alive = true;
-    const key = offersKey(country, query);
+    const key = offersKey(country, mode, query);
     (async () => {
       const saved = await kv.get(key, null);
       if (!alive) return;
@@ -134,7 +140,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       if (pricesOff) { setOffers({ status: "off", data: null, error: "" }); return; }
       setOffers({ status: "loading", data: null, error: "" });
       try {
-        const data = await pricesTask({ query, country });
+        const want = { name: gap.item, kind: kindOf(gap), color: gap.color };
+        const data = await pricesTask({ query, country, want, chains: mode === "chains" ? searchChains(gap) : [] });
         if (!alive) return;
         await kv.set(key, data);
         setOffers({ status: "done", data, error: "" });
@@ -145,7 +152,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       }
     })();
     return () => { alive = false; };
-  }, [query, country, setupReady, pricesOff]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, mode, country, setupReady, pricesOff]);
 
   const list = useMemo(() => {
     const all = offers.data?.offers || [];
@@ -263,7 +271,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             <span>Мой размер <b>{size.value}</b></span>
           </button>
           <span className="tiny-text">
-            {[size.detail, size.estimated ? "по оценке" : "по меркам", sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")}
+            {[size.detail, size.estimated ? "по оценке" : "по меркам", mode === "chains" ? "выбери его на сайте магазина" : sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")}
           </span>
           {size.note && <span className="size-card__note my-size__note">{size.note}</span>}
         </div>
@@ -323,7 +331,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             ) : (
               <p className="muted-text">
                 {filter === "chains"
-                  ? (offers.data?.offers || []).length ? "В Google Покупках нет этой вещи из популярных магазинов. Поищи прямо у них или посмотри «Все новые»." : "В Google Покупках ничего не нашлось — поищи прямо на сайтах магазинов."
+                  ? "В популярных магазинах такой вещи не нашлось. Поищи прямо у них на сайте или посмотри «Все новые»."
                   : filter === "new" ? "Новых предложений нет — посмотри «Б/у» или сайты магазинов." : "Б/у предложений нет — поищи на сайтах ниже."}
               </p>
             )

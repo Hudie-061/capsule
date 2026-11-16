@@ -171,3 +171,27 @@ export function Sheet({ open, onClose, title, subtitle, children, className = ""
 export function Spinner({ label }) {
   return <span className="spinner" role="status" aria-label={label || "Загрузка"} />;
 }
+
+// Stylist notes as small chips; a tap opens a short explanation under them, a second tap closes it.
+// tips: [{ title, why }] (or { label, value, why } for palette traits).
+export function HintChips({ tips, tone = "light", label = "Почему так" }) {
+  const [open, setOpen] = useState(-1);
+  const list = (tips || []).filter((t) => t && t.why && (t.title || t.label));
+  const signature = list.map((t) => `${t.title || t.label}:${t.why}`).join("|");
+  useEffect(() => setOpen(-1), [signature]); // another outfit or palette closes the open note
+  if (!list.length) return null;
+  const tip = list[open];
+  return (
+    <div className={`hint-chips hint-chips--${tone}`}>
+      <div className="hint-chips__row" role="group" aria-label={label}>
+        {list.map((t, i) => (
+          <button type="button" key={`${t.title || t.label}-${i}`} className={`hint-chip${open === i ? " is-on" : ""}`} aria-expanded={open === i} onClick={() => setOpen(open === i ? -1 : i)}>
+            <Icon name="star" size={12} width={2.2} />
+            {t.title || <>{t.label}: <b>{t.value}</b></>}
+          </button>
+        ))}
+      </div>
+      {tip && <p className="hint-bubble pop" role="status" key={open}>{tip.why}</p>}
+    </div>
+  );
+}

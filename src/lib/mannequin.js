@@ -39,8 +39,24 @@ export function bodyFor({ gender = "", height = "", weight = "" } = {}) {
   };
 }
 
-function drawBody(ctx, b) {
-  ctx.fillStyle = BODY;
+// A soft shadow on the floor grounds the figure.
+function drawFloor(ctx) {
+  const g = ctx.createRadialGradient(CX, Y.floor + 4, 10, CX, Y.floor + 4, 150);
+  g.addColorStop(0, "rgba(30, 27, 24, 0.16)");
+  g.addColorStop(1, "rgba(30, 27, 24, 0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(CX, Y.floor + 4, 150, 22, 0, 0, Math.PI * 2); ctx.fill();
+}
+
+// A dress-form look: when a top, jacket or dress covers the upper body its sleeves are the arms,
+// so the mannequin's own arms are not drawn (otherwise flat-lay sleeves and arms show side by side).
+function drawBody(ctx, b, { arms = true } = {}) {
+  // Light from the left: a gentle gradient instead of a flat fill.
+  const shade = ctx.createLinearGradient(CX - 160, 0, CX + 160, 0);
+  shade.addColorStop(0, "#DDD3C6");
+  shade.addColorStop(0.55, BODY);
+  shade.addColorStop(1, "#C9BDAE");
+  ctx.fillStyle = shade;
   // legs
   for (const side of [-1, 1]) {
     ctx.beginPath();
@@ -69,8 +85,8 @@ function drawBody(ctx, b) {
   ctx.closePath();
   ctx.fill();
   // arms: shoulder → elbow → wrist, relaxed at the sides
-  ctx.strokeStyle = BODY; ctx.lineCap = "round"; ctx.lineJoin = "round";
-  for (const side of [-1, 1]) {
+  ctx.strokeStyle = shade; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  for (const side of arms ? [-1, 1] : []) {
     ctx.lineWidth = 36;
     ctx.beginPath(); ctx.moveTo(CX + side * (b.shoulder - 10), Y.shoulder + 22); ctx.lineTo(CX + side * (b.shoulder + 14), 360); ctx.stroke();
     ctx.lineWidth = 28;
@@ -110,7 +126,7 @@ export function layoutOutfit(items, options = {}) {
   if (bottom) {
     const k = kindOf(bottom);
     const hem = k === "shorts" ? 650 : k === "skirt" ? Y.knee : shoes ? Y.floor - shoeH + (k === "jeans" || k === "trousers" ? 22 : 18) : Y.ankle + 12;
-    box(bottom, "bottom", CX - b.hip - 34, b.waistY - 10, CX + b.hip + 34, hem, { align: "top", stretch: true });
+    box(bottom, "bottom", CX - b.hip - 34, b.waistY - 10, CX + b.hip + 34, hem, { align: "top", stretch: true, cover: 2 * b.hip + 22 });
   }
   if (dress) box(dress, "dress", CX - b.hip - 80, Y.neck - 6, CX + b.hip + 80, Y.knee + 50, { align: "top" });
   if (top) {
@@ -168,6 +184,16 @@ function loadImage(src) {
   });
 }
 
+// How wide the cutout is at a given height (0 = top row, 1 = bottom row), as a share of its full width.
+// For trousers the top rows are the waistband, which has to cover the mannequin's hips.
+function widthAt(canvas, share) {
+  const y = Math.min(canvas.height - 1, Math.max(0, Math.round((canvas.height - 1) * share)));
+  const row = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, y, canvas.width, 1).data;
+  let first = -1; let last = -1;
+  for (let x = 0; x < canvas.width; x += 1) if (row[x * 4 + 3] > 40) { if (first < 0) first = x; last = x; }
+  return first < 0 ? 1 : (last - first + 1) / canvas.width;
+}
+
 async function trimmed(src) {
   if (trimmedCache.has(src)) return trimmedCache.get(src);
   const image = await loadImage(src);
@@ -184,23 +210,31 @@ async function trimmed(src) {
     out.height = b.maxY - b.minY + 1;
     out.getContext("2d").drawImage(canvas, b.minX, b.minY, out.width, out.height, 0, 0, out.width, out.height);
   }
+  out.waist = widthAt(out, 0.04);
   trimmedCache.set(src, out);
   return out;
 }
 
 // Fit the image into its box (keeping proportions), then crop for a tucked top.
+// Trousers and skirts (`stretch`) reach their hem exactly, and their waistband is widened or narrowed to
+// sit on the hips (`cover`), within 25% of the photo's own proportions so they never look distorted.
 function place(ctx, img, p) {
   const bw = p.x1 - p.x0;
   const bh = p.y1 - p.y0;
-  let scale = Math.min(bw / img.width, bh / img.height);
-  // Trousers and skirts must reach their hem: prefer the height when the box is tall and narrow.
-  if (p.stretch) scale = Math.min(bh / img.height, (bw * 1.25) / img.width);
-  const w = img.width * scale;
-  const h = img.height * scale;
+  const scale = Math.min(bw / img.width, bh / img.height);
+  let sx = scale;
+  let sy = scale;
+  if (p.stretch) {
+    sy = bh / img.height;
+    const fit = p.cover ? p.cover / (img.width * (img.waist || 1)) : sy;
+    sx = Math.min(sy * 1.25, Math.max(sy * 0.8, fit));
+  }
+  const w = img.width * sx;
+  const h = img.height * sy;
   const left = (p.x0 + p.x1) / 2 - w / 2;
   const top = p.align === "bottom" ? p.y1 - h : p.align === "top" ? p.y0 : p.y0 + (bh - h) / 2;
   if (p.open) {
-    const gap = w * 0.075;
+    const gap = w * 0.045;
     ctx.drawImage(img, 0, 0, img.width / 2, img.height, left - gap, top, w / 2, h);
     ctx.drawImage(img, img.width / 2, 0, img.width / 2, img.height, left + w / 2 + gap, top, w / 2, h);
     return;
@@ -229,7 +263,8 @@ export async function renderOutfit(items, options = {}) {
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
   ctx.imageSmoothingQuality = "high";
-  drawBody(ctx, body);
+  drawFloor(ctx);
+  drawBody(ctx, body, { arms: !placed.some((p) => ["top", "outer", "dress"].includes(p.role)) });
   if (!placed.some((p) => p.role === "shoes")) shoesPlaceholder(ctx);
 
   const order = (p) => (tuck && p.role === "top" ? 1 : ORDER[p.role] ?? 5);
@@ -238,7 +273,12 @@ export async function renderOutfit(items, options = {}) {
   let headDrawn = false;
   for (const { p, img } of layers) {
     if (!headDrawn && order(p) >= 7) { drawHead(ctx); headDrawn = true; }
-    if (img) place(ctx, img, p);
+    if (!img) continue;
+    // A soft shadow under every layer separates a jacket from the shirt and the shirt from the trousers.
+    ctx.save();
+    ctx.shadowColor = "rgba(30, 27, 24, 0.18)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 5;
+    place(ctx, img, p);
+    ctx.restore();
   }
   if (!headDrawn) drawHead(ctx);
   return canvas.toDataURL("image/jpeg", 0.88);

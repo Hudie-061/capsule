@@ -81,8 +81,8 @@ const month = () => new Date().toISOString().slice(0, 7);
 const count = async (env, key) => int(await env.USAGE.get(key), 0);
 // Counting runs after Gemini already answered. If KV fails here (for example the free daily write
 // quota is used up), the user still gets the paid-for result; the error goes to the Worker logs.
-async function bump(env, key, ttl) {
-  try { await env.USAGE.put(key, String((await count(env, key)) + 1), { expirationTtl: ttl }); }
+async function bump(env, key, ttl, by = 1) {
+  try { await env.USAGE.put(key, String((await count(env, key)) + by), { expirationTtl: ttl }); }
   catch (error) { console.error("capsule-proxy: usage counter not saved", key, error?.message || error); }
 }
 const limits = (env) => ({
@@ -291,11 +291,25 @@ function feedbackText(fb, items) {
   return quote(fb.map((f) => `- ${f.liked ? "LIKED" : "DISLIKED"}: ${f.title} [${f.itemIds.map((id) => names[id] || "removed item").join(" + ")}]${f.tuck ? " (top tucked in)" : ""}; reasons: ${f.reasons.join(", ") || "none"}${f.comment ? `; user's words: "${f.comment}"` : ""}`).join("\n"));
 }
 
+// A short stylist note the app shows as a chip; a tap opens the explanation.
+const TIP = { type: "OBJECT", properties: { title: { type: "STRING" }, why: { type: "STRING" } }, required: ["title", "why"] };
+const tips = (value) => (Array.isArray(value) ? value : []).slice(0, 2).map((t) => ({ title: text(t?.title, 30), why: text(t?.why, 160) })).filter((t) => t.title && t.why);
+
 const OUTFIT_SCHEMA = {
   type: "OBJECT",
-  properties: { outfits: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, why: { type: "STRING" }, itemIds: { type: "ARRAY", items: { type: "STRING" } }, tuck: { type: "BOOLEAN" } }, required: ["title", "why", "itemIds", "tuck"] } } },
+  properties: { outfits: { type: "ARRAY", items: { type: "OBJECT", properties: { title: { type: "STRING" }, why: { type: "STRING" }, itemIds: { type: "ARRAY", items: { type: "STRING" } }, tuck: { type: "BOOLEAN" }, tips: { type: "ARRAY", items: TIP } }, required: ["title", "why", "itemIds", "tuck", "tips"] } } },
   required: ["outfits"],
 };
+
+// How a professional stylist puts an outfit together: common styling practice (colour proportions borrowed
+// from interior design, personal contrast from colour analysis, the rule of thirds for proportion). These
+// are rules of thumb, so the model may break one when the result clearly looks better.
+const STYLIST_RULES = `- Colour proportions: one dominant colour (about 60% of the outfit, usually a neutral), one supporting colour (about 30%) and at most one accent (about 10%). Good schemes: tonal (shades of one colour), analogous (neighbours on the colour wheel), neutrals plus one accent, or one complementary accent.
+- Personal colours: when the profile has a palette, the person's best colours go near the face (tops, outerwear, scarves); colours to avoid near the face go only on the lower body, or not at all.
+- Contrast: match the outfit's light/dark contrast to the person's own contrast from the palette (high contrast: clear light-dark pairs; soft or medium: tonal looks and gentle transitions).
+- Proportion and volume: balance a loose piece with a fitted one; avoid cutting the body in half, prefer about 1/3 to 2/3 (a tucked or half-tucked top with higher-rise bottoms, a cropped layer over long trousers, a long layer over slim bottoms).
+- Formality: keep all pieces within one step of formality (a blazer with jeans works; a blazer with sweatpants only for a streetwear profile). Shoes match the formality and either echo a colour of the outfit or stay neutral.
+- Texture: in tonal or neutral outfits mix a smooth fabric with a textured one so the look is not flat.`;
 
 const GAPS_SCHEMA = {
   type: "OBJECT",
@@ -316,27 +330,42 @@ const GAPS_SCHEMA = {
   required: ["summary", "items"],
 };
 
+const SWATCH = { type: "OBJECT", properties: { name: { type: "STRING" }, hex: { type: "STRING" }, why: { type: "STRING" } }, required: ["name", "hex", "why"] };
 const PALETTE_SCHEMA = {
   type: "OBJECT",
   properties: {
     isPerson: { type: "BOOLEAN" },
-    season: { type: "STRING" }, undertone: { type: "STRING" }, contrast: { type: "STRING" },
-    best: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, hex: { type: "STRING" } }, required: ["name", "hex"] } },
-    avoid: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, hex: { type: "STRING" } }, required: ["name", "hex"] } },
+    season: { type: "STRING" }, undertone: { type: "STRING" }, contrast: { type: "STRING" }, why: { type: "STRING" }, photoNote: { type: "STRING" },
+    traits: { type: "ARRAY", items: { type: "OBJECT", properties: { label: { type: "STRING" }, value: { type: "STRING" }, why: { type: "STRING" } }, required: ["label", "value", "why"] } },
+    best: { type: "ARRAY", items: SWATCH },
+    avoid: { type: "ARRAY", items: SWATCH },
     metal: { type: "OBJECT", properties: { name: { type: "STRING" }, good: { type: "ARRAY", items: { type: "STRING" } }, avoid: { type: "STRING" } }, required: ["name", "good", "avoid"] },
     jewelry: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, note: { type: "STRING" } }, required: ["name", "note"] } },
   },
-  required: ["isPerson", "season", "undertone", "contrast", "best", "avoid", "metal", "jewelry"],
+  required: ["isPerson", "season", "undertone", "contrast", "why", "photoNote", "traits", "best", "avoid", "metal", "jewelry"],
 };
 
+// Personal colour analysis the way trained analysts do it: the 12-season system (Sci/ART by Kathryn
+// Kalisz and the schools that follow it) describes a person's natural colouring by hue, value and chroma
+// (Munsell's three colour dimensions) plus the contrast between hair, skin and eyes. In a studio it is
+// confirmed by draping fabric under the face; from a selfie it is an estimate, so the light is checked too.
 const PALETTE_PROMPT = `This is a selfie sent to a wardrobe app for a personal colour analysis. The result is used ONLY to choose clothing colours, metals and accessories near the face.
-Look at skin undertone, hair and eye colour, and the contrast between them, under the lighting of the photo.
+Work like a trained colour analyst using the 12-season system. Judge the person's natural colouring (skin, hair, eyes, brows) on:
+- hue: warm (golden, peachy), cool (pink, bluish) or neutral undertone;
+- value: light or deep overall colouring;
+- chroma: clear and bright, or soft and muted (greyed) colouring;
+- contrast: how different hair, skin and eyes are in lightness.
+Find the dominant dimension first, then choose one season: Светлая весна, Тёплая весна, Яркая весна, Светлое лето, Холодное лето, Мягкое лето, Мягкая осень, Тёплая осень, Тёмная осень, Тёмная зима, Холодная зима, Яркая зима.
+Correct for the photo: warm indoor light, white balance, filters, make-up and dyed hair change colours; judge evenly lit skin, brows and eyes.
 If the photo does not clearly show one real person's face, return isPerson false, empty strings and empty lists.
-Otherwise return isPerson true and, all text in Russian:
-- season: the seasonal colour type, e.g. "Мягкая осень", "Холодная зима", "Светлая весна".
+Otherwise return isPerson true and, all text in Russian, short and concrete about this person's visible colouring:
+- season: one of the 12 names above.
 - undertone: short, e.g. "тёплый подтон"; contrast: short, e.g. "средний контраст".
-- best: exactly 8 clothing colours that suit them: short Russian name (1-2 words) and #rrggbb.
-- avoid: exactly 4 colours to avoid near the face: short Russian name and #rrggbb.
+- why: 1-2 sentences on which features of the face lead to this season, e.g. "Золотистая кожа и карие глаза — тёплые; волосы и кожа близки по светлоте, контраст мягкий, поэтому приглушённые тёплые цвета".
+- traits: exactly 4 items with label "Подтон", "Глубина", "Яркость", "Контраст": value (1-3 words) and why (one short sentence about this face).
+- best: exactly 8 clothing colours from this season's palette: first 3 neutrals to build outfits on (use them instead of black or white when those do not suit), then 5 colours. Each: short Russian name (1-2 words), #rrggbb, and why (at most 90 characters: what it does next to this face, e.g. "повторяет тёплый оттенок глаз", "мягкая замена чёрному").
+- avoid: exactly 4 colours that work against this face: name, #rrggbb and why (at most 90 characters: what goes wrong, e.g. "слишком холодный — кожа кажется серой").
+- photoNote: empty, or one short sentence if the light, a filter or make-up may have changed the result and a daylight selfie would be more accurate.
 - metal: name of the metals that suit them (e.g. "Золото и бронза"), good: 2 metal colours as #rrggbb, avoid: 1 metal colour to avoid as #rrggbb.
 - jewelry: exactly 4 accessories that suit them (watch, chain, ring, glasses, scarf...): name and a short note about material or colour.
 Describe only colours. Never comment on attractiveness, ethnicity, age, body or health.`;
@@ -366,26 +395,78 @@ function deliveryCost(value) {
 
 const httpsUrl = (value) => (typeof value === "string" && /^https:\/\//i.test(value) ? value.slice(0, 1000) : "");
 
+// Popular mass-market chains (the owner's choice). A plain Google Shopping search for "navy wool blazer"
+// in Belgium shows premium brands and Vinted, not Zara or H&M; with the chain's name in the query the
+// results are almost all from that chain. So «Популярные» asks once per chain (one search each) and
+// keeps only that chain's own offers. `match` is tested against Google's shop name (H&M shows up as
+// "www2.hm.com/nl_be/index.html", Zara as "ZARA Belgium").
+const CHAINS = {
+  zara: { name: "Zara", match: /^zara\b|zara\.com/i },
+  hm: { name: "H&M", match: /^h\s*&\s*m\b|(^|\.)hm\.com/i },
+  uniqlo: { name: "Uniqlo", match: /uniqlo/i },
+  mango: { name: "Mango", match: /^mango\b|mango\.com/i },
+  newyorker: { name: "New Yorker", match: /new\s*yorker/i },
+  footlocker: { name: "Foot Locker", match: /foot\s*locker/i },
+  ca: { name: "C&A", match: /^c\s*&\s*a\b|c-and-a\.com/i },
+};
+const MAX_CHAINS = 4;
+const PER_CHAIN = 2;
+
+const searchText = (value) => text(value, 100).replace(/[^\p{L}\p{N} '-]/gu, " ").replace(/\s+/g, " ").trim();
+
 function priceRequest(input) {
-  const query = text(input?.query, 100).replace(/[^\p{L}\p{N} '-]/gu, " ").replace(/\s+/g, " ").trim();
+  const query = searchText(input?.query);
   if (!query) return null;
   const country = Object.hasOwn(COUNTRIES, input?.country) ? input.country : "be";
-  return { query, country, currency: COUNTRIES[country] };
+  const chains = Array.isArray(input?.chains) ? [...new Set(input.chains.filter((id) => typeof id === "string" && Object.hasOwn(CHAINS, id)))].slice(0, MAX_CHAINS) : [];
+  // What the person is looking for, so offers of another type or colour can be dropped (see `relevant`).
+  const w = input?.want && typeof input.want === "object" ? input.want : {};
+  const want = { name: text(w.name, 80), kind: kind(w.kind), color: HEX.test(w.color || "") ? w.color : "" };
+  return { query, country, currency: COUNTRIES[country], chains, want };
 }
 
 const hashKey = async (prefix, value) => {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return `${prefix}${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 };
-// v2: offers carry the token for the shop's own link (see `offer`), so v1 answers are not reused.
-const priceKey = (req) => hashKey("prices:v2:", `${req.country}|${req.query.toLowerCase()}`);
+// v3: chain searches and the relevance check, so v1/v2 answers are not reused.
+const priceKey = (req) => hashKey("prices:v3:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}`);
+
+async function googleShopping(env, q, country) {
+  const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
+  url.search = new URLSearchParams({ engine: "google_shopping", q, gl: country, hl: "en", api_key: env.SERPAPI_KEY }).toString();
+  const response = await fetch(url.toString());
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.error) throw new TaskError(502, `Поиск цен не ответил${data.error ? `: ${text(data.error, 120)}` : ""}. Попробуй позже.`);
+  return data.shopping_results;
+}
+
+// The cheapest result is often something else entirely (a kids' item, trousers for a blazer search, a
+// spare button). Gemini reads the titles and keeps only the same type of piece, for the right gender and
+// in a close colour. If the check fails, nothing is dropped.
+const RELEVANT_SCHEMA = { type: "OBJECT", properties: { ids: { type: "ARRAY", items: { type: "INTEGER" } } }, required: ["ids"] };
+async function relevant(env, req, offers) {
+  if (!offers.length || (!req.want.name && !req.want.kind)) return offers;
+  const wanted = `${req.want.name}${req.want.kind ? ` (type: ${req.want.kind})` : ""}${req.want.color ? `, colour ${req.want.color}` : ""}; search words: ${req.query}`;
+  const titles = offers.map((o, i) => `${i}. ${o.title}`).join("\n");
+  try {
+    const verdict = await askJson(env, `A shopper wants to buy this piece of clothing: ${quote(wanted)}
+Below are product titles from online shops, in any language. Return "ids" of the products that ARE this piece: the same garment type (for example a blazer is a tailored jacket, not a coat, shirt, trousers or a full suit set), for the same gender when the search says men or women, adult sizes (no kids or baby items), and the same or a close colour. Leave out everything else, including accessories, multipacks, costumes and spare parts.
+${quote(`\n${titles}\n`)}`, RELEVANT_SCHEMA, { temperature: 0 });
+    const keep = new Set((Array.isArray(verdict.ids) ? verdict.ids : []).filter(Number.isInteger));
+    return offers.filter((_, i) => keep.has(i));
+  } catch (error) {
+    console.error("capsule-proxy: relevance check failed", error?.message || error);
+    return offers;
+  }
+}
 
 // Google Shopping's product token, sent back by the app to get the shop's own link (task `offer`).
 const TOKEN = /^[\w+/=-]{16,4000}$/;
 const money2 = (value) => (typeof value === "number" && value > 0 ? Math.round(value * 100) / 100 : null);
 
-// All offers (about 40), cheapest first. The app picks what to show: popular chains, all new, or second-hand.
-function normalizeOffers(results) {
+// All offers (about 40), cheapest first, or in Google's order (most relevant first) with `keepOrder`.
+function normalizeOffers(results, { keepOrder = false } = {}) {
   const seen = new Set();
   const offers = [];
   for (const r of (Array.isArray(results) ? results : []).slice(0, 60)) {
@@ -409,7 +490,7 @@ function normalizeOffers(results) {
       rating: typeof r.rating === "number" ? r.rating : null,
     });
   }
-  return offers.sort((a, b) => a.total - b.total).slice(0, 40);
+  return (keepOrder ? offers : offers.sort((a, b) => a.total - b.total)).slice(0, 40);
 }
 
 // "https://www.google.com/url?q=https://shop…" → "https://shop…"
@@ -507,19 +588,23 @@ ${JSON.stringify(catalog(items))}
 PAST RATINGS (repeat what was liked, avoid the reasons for dislikes)
 ${feedbackText(fb, items)}
 
-${occasion ? `OCCASION / WEATHER: ${quote(occasion)}\n` : ""}TASK
-Create ${n} distinct, wearable outfits.
+${occasion ? `OCCASION / WEATHER: ${quote(occasion)}\n` : ""}HOW A STYLIST BUILDS AN OUTFIT
+${STYLIST_RULES}
+
+TASK
+Create ${n} distinct, wearable outfits, styled by the rules above.
 - Each outfit: exactly one bottom plus one top, OR one dress; optionally one outerwear layer, shoes and at most one accessory when they exist.
-- Colour: tonal or analogous harmony, at most one accent, one dominant colour.
-- Silhouette: balance volume; set "tuck": true when tucking the top in suits the profile goal.
+- Set "tuck": true when tucking the top in helps the proportions or suits the profile goal.
 - Respect "Never suggest" and learned rules strictly. Vary garment usage.
 - Do not repeat these recently rated combinations: ${shown.join(" | ") || "none"}.
-- "title": 2-4 words, "why": one short sentence about the clothes. Write both in Russian.`;
+- "title": 2-4 words. "why": one sentence on what makes this outfit work for THIS person (colours, proportion, occasion), not generic praise.
+- "tips": 1-2 stylist notes the person can tap to learn from: "title" = the principle in 1-3 words (e.g. "Тон в тон", "Правило трети", "Цвет у лица", "Баланс объёма", "Один акцент"), "why" = one sentence (at most 110 characters) on how it works in this outfit.
+Write all text in Russian.`;
       const result = await askJson(env, prompt, OUTFIT_SCHEMA, { temperature: 0.9 });
       const ids = new Set(items.map((i) => i.id));
       return {
         outfits: (Array.isArray(result.outfits) ? result.outfits : []).slice(0, n).map((o) => ({
-          title: text(o.title, 60), why: text(o.why, 220), tuck: Boolean(o.tuck),
+          title: text(o.title, 60), why: text(o.why, 220), tuck: Boolean(o.tuck), tips: tips(o.tips),
           itemIds: [...new Set((Array.isArray(o.itemIds) ? o.itemIds : []).filter((id) => ids.has(id)))].slice(0, 6),
         })),
       };
@@ -532,6 +617,7 @@ Create ${n} distinct, wearable outfits.
       const items = (Array.isArray(input.wardrobe) ? input.wardrobe : []).slice(0, 300).map(item).filter((i) => i.id);
       const fb = feedback(input.feedback);
       const prompt = `Analyse the user's wardrobe, profile and outfit ratings and recommend at most 6 specific clothing pieces to BUY that would unlock the most new outfits they would like.
+Think like a capsule-wardrobe stylist: first the missing versatile pieces that pair with at least 3 owned items (a base layer, a third piece such as a blazer or cardigan, the right shoes), in neutrals or the person's palette; then pieces that move the wardrobe towards the profile's styles. Every piece needs a clear role. Never suggest a colour from the palette's "avoid" list for a piece worn near the face.
 
 USER PROFILE
 ${profileText(profile(input.profile))}
@@ -545,7 +631,7 @@ ${JSON.stringify(catalog(items))}
 PAST RATINGS
 ${feedbackText(fb, items)}
 
-For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence, "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "kind" = its exact type as one short lowercase English noun (e.g. "blazer", "shirt", "hoodie", "jeans", "boots", "bag", "chain"), "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" from the profile gender, or only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
+For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence naming which owned pieces it goes with and what it adds (and why its colour suits the person when the palette is known), "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "kind" = its exact type as one short lowercase English noun (e.g. "blazer", "shirt", "hoodie", "jeans", "boots", "bag", "chain"), "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" from the profile gender, or only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
       const result = await askJson(env, prompt, GAPS_SCHEMA, { temperature: 0.5 });
       const ids = new Set(items.map((i) => i.id));
       return {
@@ -567,10 +653,12 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
     async run(env, input) {
       const result = await askJson(env, PALETTE_PROMPT, PALETTE_SCHEMA, { images: [image(input.image, "selfie")], temperature: 0.3 });
       if (result.isPerson !== true) throw new TaskError(422, "На фото не видно лица. Сделай селфи при дневном свете, без фильтров.");
-      const swatches = (value, n) => (Array.isArray(value) ? value : []).filter((c) => HEX.test(c?.hex || "")).slice(0, n).map((c) => ({ name: text(c.name, 24), hex: c.hex }));
+      const swatches = (value, n) => (Array.isArray(value) ? value : []).filter((c) => HEX.test(c?.hex || "")).slice(0, n).map((c) => ({ name: text(c.name, 24), hex: c.hex, why: text(c.why, 120) }));
       const metal = result.metal && typeof result.metal === "object" ? result.metal : {};
       return {
         season: text(result.season, 40), undertone: text(result.undertone, 40), contrast: text(result.contrast, 40),
+        why: text(result.why, 300), photoNote: text(result.photoNote, 160),
+        traits: (Array.isArray(result.traits) ? result.traits : []).slice(0, 4).map((t) => ({ label: text(t?.label, 20), value: text(t?.value, 30), why: text(t?.why, 140) })).filter((t) => t.label && t.value),
         best: swatches(result.best, 8), avoid: swatches(result.avoid, 4),
         metal: {
           name: text(metal.name, 40),
@@ -593,17 +681,34 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
         return cached ? { ...JSON.parse(cached), cached: true } : null;
       } catch { return null; }
     },
-    async run(env, input) {
+    // `chains` (ids from CHAINS): one search per chain, at most 2 new offers from each. Without chains:
+    // one search in all shops (new and second-hand). `searches` tells the counter how many were paid.
+    async run(env, input, { budget = Infinity } = {}) {
       if (!env.SERPAPI_KEY) throw new TaskError(503, "Поиск цен ещё не подключён — владелец добавит ключ. Пока можно искать по ссылкам на магазины.", "prices_not_configured");
       const req = priceRequest(input);
       if (!req) throw new TaskError(400, "query is required");
       await requireClothingQuery(env, req.query);
-      const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
-      url.search = new URLSearchParams({ engine: "google_shopping", q: req.query, gl: req.country, hl: "en", api_key: env.SERPAPI_KEY }).toString();
-      const response = await fetch(url.toString());
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.error) throw new TaskError(502, `Поиск цен не ответил${data.error ? `: ${text(data.error, 120)}` : ""}. Попробуй позже.`);
-      const result = { query: req.query, country: req.country, currency: req.currency, offers: normalizeOffers(data.shopping_results), at: new Date().toISOString() };
+      let offers;
+      let searches;
+      if (req.chains.length) {
+        const chains = req.chains.slice(0, Math.max(1, budget));
+        searches = chains.length;
+        const found = await Promise.allSettled(chains.map((id) => googleShopping(env, `${CHAINS[id].name} ${req.query}`, req.country)));
+        if (found.every((f) => f.status === "rejected")) throw found[0].reason;
+        const own = found.flatMap((f, i) => (f.status === "fulfilled"
+          ? normalizeOffers(f.value, { keepOrder: true })
+            .filter((o) => o.condition === "new" && CHAINS[chains[i]].match.test(o.store))
+            .slice(0, 8) // Google's 8 most relevant per chain are enough to keep 2 after the check
+            .map((o) => ({ ...o, chain: chains[i], store: CHAINS[chains[i]].name }))
+          : []));
+        const kept = await relevant(env, req, own);
+        const taken = {};
+        offers = kept.filter((o) => (taken[o.chain] = (taken[o.chain] || 0) + 1) <= PER_CHAIN).sort((a, b) => a.total - b.total);
+      } else {
+        searches = 1;
+        offers = await relevant(env, req, normalizeOffers(await googleShopping(env, req.query, req.country)));
+      }
+      const result = { query: req.query, country: req.country, currency: req.currency, chains: req.chains, offers, searches, at: new Date().toISOString() };
       try { await env.USAGE.put(await priceKey(req), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 }); }
       catch (error) { console.error("capsule-proxy: price cache not saved", error?.message || error); }
       return result;
@@ -739,20 +844,23 @@ async function handle(request, env, { headers, origin, allowed }) {
     const what = { image: "картинок", search: "поисков цен" }[task.kind] || "запросов";
     return json({ error: `Дневной лимит ${what} исчерпан. Попробуй завтра.` }, 429, headers);
   }
-  if (limit.monthly[task.kind] !== undefined && (await count(env, monthKey)) >= limit.monthly[task.kind]) {
+  const monthly = limit.monthly[task.kind];
+  const used = monthly !== undefined ? await count(env, monthKey) : 0;
+  if (monthly !== undefined && used >= monthly) {
     const what = task.kind === "image" ? "картинок" : "поисков цен";
     return json({ error: `Общий месячный лимит ${what} исчерпан. Напиши владельцу приложения.` }, 429, headers);
   }
 
   let result;
   try {
-    result = await task.run(env, input);
+    result = await task.run(env, input, { budget: monthly !== undefined ? monthly - used : Infinity });
   } catch (error) {
     const status = error instanceof TaskError ? error.status : 500;
     if (status === 500) console.error(`capsule-proxy: task ${match[1]} failed`, error?.stack || error);
     return json({ error: status === 500 ? "Внутренняя ошибка сервера" : error.message, ...(error.code ? { code: error.code } : {}) }, status, headers);
   }
   await bump(env, dayKey, 60 * 60 * 48);
-  if (limit.monthly[task.kind] !== undefined) await bump(env, monthKey, 60 * 60 * 24 * 40);
+  // A price search in several chains spends one paid search per chain from the shared monthly budget.
+  if (monthly !== undefined) await bump(env, monthKey, 60 * 60 * 24 * 40, Math.max(1, int(result?.searches, 1)));
   return json(result, 200, headers);
 }

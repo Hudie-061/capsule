@@ -8,7 +8,7 @@ import { blobs } from "./lib/db.js";
 import { paletteTask } from "./lib/gemini.js";
 import { canvasToBlob, loadBitmap, makeCanvas, normalizeImage } from "./lib/image.js";
 import { getProfile, saveProfile } from "./lib/settings.js";
-import { Icon, Segmented } from "./ui.jsx";
+import { HintChips, Icon, Segmented } from "./ui.jsx";
 
 // Story image 1080×1920 drawn on a canvas, so no screenshot library is needed.
 async function storyImage(p) {
@@ -53,8 +53,10 @@ async function smallSelfie(file) {
   return canvasToBlob(canvas, "image/jpeg", 0.85);
 }
 
+// The stylist reads this from the profile: season, undertone and contrast (for the outfit's contrast), colours.
 function paletteText(p) {
-  return `${p.season}: ${p.best.map((c) => c.name.toLowerCase()).join(", ")}${p.avoid.length ? `; у лица избегать: ${p.avoid.map((c) => c.name.toLowerCase()).join(", ")}` : ""}`;
+  const traits = [p.undertone, p.contrast].filter(Boolean).join(", ");
+  return `${p.season}${traits ? ` (${traits})` : ""}: ${p.best.map((c) => c.name.toLowerCase()).join(", ")}${p.avoid.length ? `; у лица избегать: ${p.avoid.map((c) => c.name.toLowerCase()).join(", ")}` : ""}`;
 }
 
 export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess }) {
@@ -143,6 +145,9 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               <span className="palette-card__muted">{[p.undertone, p.contrast].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
+          {p.why ? <p className="palette-why">{p.why}</p> : <p className="palette-note">Сделай новое селфи — теперь объясняю, почему тебе идёт каждый цвет.</p>}
+          <HintChips tips={p.traits} tone="dark" label="Из чего складывается цветотип" />
+          {p.photoNote && <p className="palette-note">{p.photoNote}</p>}
           <Segmented role="tablist" tone="dark" label="Раздел палитры" value={tab} onChange={setTab} options={[{ id: "colors", label: "Цвета" }, { id: "jewel", label: "Металлы и украшения" }]} />
           {tab === "colors" ? (
             <div className="palette-section">
@@ -162,21 +167,22 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               ) : (
                 <button type="button" className="drape-hint" onClick={() => fileRef.current?.click()}><Icon name="camera" size={16} width={2} /> Новое селфи — покажу цвета рядом с лицом</button>
               )}
-              <span className="palette-card__label">Твои лучшие цвета{selfie ? " · нажми, чтобы примерить" : ""}</span>
+              <span className="palette-card__label">Твои лучшие цвета · {selfie ? "нажми — примерю и объясню" : "нажми, чтобы узнать почему"}</span>
               <div className="swatch-grid">
                 {p.best.map((c, i) => (
-                  <button type="button" key={c.hex + i} className={`swatch pop${selfie && drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} disabled={!selfie} aria-pressed={selfie ? drape.best === i : undefined} onClick={() => setDrape({ ...drape, best: i })}>
+                  <button type="button" key={c.hex + i} className={`swatch pop${drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={drape.best === i} onClick={() => setDrape({ ...drape, best: i })}>
                     <span className="swatch__color" style={{ background: c.hex }} />
                     <span className="swatch__name">{c.name}</span>
                   </button>
                 ))}
               </div>
+              {p.best[drape.best]?.why && <p className="swatch-why fade" key={`best-${drape.best}`}><b>{p.best[drape.best].name}</b> — {p.best[drape.best].why}</p>}
               {p.avoid.length > 0 && (
                 <>
                   <span className="palette-card__label">Лучше избегать у лица</span>
                   <div className="swatch-grid">
                     {p.avoid.map((c, i) => (
-                      <button type="button" key={c.hex + i} className={`swatch${selfie && drape.avoid === i ? " is-on" : ""}`} disabled={!selfie} aria-pressed={selfie ? drape.avoid === i : undefined} onClick={() => setDrape({ ...drape, avoid: i })}>
+                      <button type="button" key={c.hex + i} className={`swatch${drape.avoid === i ? " is-on" : ""}`} aria-pressed={drape.avoid === i} onClick={() => setDrape({ ...drape, avoid: i })}>
                         <span className="swatch__color swatch__color--avoid" style={{ background: c.hex }}>
                           <svg aria-hidden="true" width="100%" height="100%" viewBox="0 0 70 34" preserveAspectRatio="none"><path d="M0 34 L70 0" stroke="#1E1B18" strokeWidth="3" /></svg>
                         </span>
@@ -184,6 +190,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
                       </button>
                     ))}
                   </div>
+                  {p.avoid[drape.avoid]?.why && <p className="swatch-why fade" key={`avoid-${drape.avoid}`}><b>{p.avoid[drape.avoid].name}</b> — {p.avoid[drape.avoid].why}</p>}
                 </>
               )}
             </div>
