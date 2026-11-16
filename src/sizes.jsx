@@ -1,9 +1,9 @@
 // «Мерки и размеры» (P3·15 + P3·16): the parametric 3D body and clothing sizes.
 // Unknown measurements are estimated from height and weight and marked «оценка»; anything the
 // user sets with a slider counts as their own measurement and can be reset back to the estimate.
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { getProfile, saveProfile } from "./lib/settings.js";
-import { MEASURES, fullBody, getBody, saveBody, sizesFor, sizesSummary } from "./lib/sizes.js";
+import { CHARTS, MEASURES, fullBody, getBody, saveBody, sizeChart, sizesFor, sizesSummary } from "./lib/sizes.js";
 import { GENDERS, splitList } from "./lib/style-options.js";
 import { Icon } from "./ui.jsx";
 
@@ -20,6 +20,8 @@ export function SizesView({ onBack, onToast }) {
   const [measured, setMeasured] = useState({});
   const [focus, setFocus] = useState("chest");
   const [oversize, setOversize] = useState(false);
+  const [chart, setChart] = useState("top");
+  const chartRef = useRef(null);
 
   useEffect(() => {
     Promise.all([getBody(), getProfile()]).then(([body, profile]) => {
@@ -36,6 +38,10 @@ export function SizesView({ onBack, onToast }) {
   const { values, estimated } = useMemo(() => fullBody(body), [body]);
   const sizes = useMemo(() => sizesFor(body, { oversize }), [body, oversize]);
   const focused = MEASURES.find((m) => m.id === focus);
+  const charts = CHARTS.filter((c) => !c.male || gender !== "female");
+  const table = useMemo(() => sizeChart(charts.some((c) => c.id === chart) ? chart : "top", body), [chart, body, charts]);
+  const CHART_OF = { top: "top", jeans: "bottom", shirt: "shirt", shoes: "shoes" };
+  const openChart = (id) => { setChart(CHART_OF[id] || "top"); chartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); };
 
   const save = async () => {
     await saveBody(body);
@@ -93,16 +99,34 @@ export function SizesView({ onBack, onToast }) {
       <div className="section-head"><span className="section-title">Твои размеры</span><span className="tiny-text">EN 13402 · Mondopoint</span></div>
       <div className="size-grid">
         {sizes.map((s, i) => (
-          <div key={s.id} className="size-card rise" style={{ animationDelay: `${i * 0.05}s` }}>
+          <button type="button" key={s.id} className="size-card rise" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => openChart(s.id)} aria-label={`${s.label}: ${s.value}. Открыть размерную сетку`}>
             <span className="tiny-text">{s.label}</span>
             <span className="size-card__value">{s.value}</span>
             <span className="tiny-text">{s.detail}</span>
             {s.note && <span className="size-card__note">{s.note}</span>}
             {s.estimated && <span className="tag tag--small">по оценке</span>}
-          </div>
+          </button>
         ))}
       </div>
       <p className="tiny-text">У брендов свои таблицы, поэтому это отправная точка. Чем больше своих мерок, тем точнее размер.</p>
+
+      <div className="section-head" ref={chartRef}><span className="section-title">Размерная сетка</span><span className="tiny-text">твоя строка выделена</span></div>
+      <div className="filter-row chart-tabs" role="tablist" aria-label="Размерная сетка">
+        {charts.map((c) => <button type="button" role="tab" key={c.id} aria-selected={chart === c.id} className={`filter-pill${chart === c.id ? " is-on" : ""}`} onClick={() => setChart(c.id)}>{c.label}</button>)}
+      </div>
+      <div className="size-table-wrap panel">
+        <table className="size-table">
+          <thead><tr>{table.columns.map((c) => <th key={c} scope="col">{c}</th>)}</tr></thead>
+          <tbody>
+            {table.rows.map((r) => (
+              <tr key={String(r.cells[0])} className={r.me ? "is-me" : ""} aria-current={r.me ? "true" : undefined}>
+                {r.cells.map((c, i) => <td key={i}>{i === 0 && r.me ? <><b>{c}</b> <span className="size-table__me">ты</span></> : c}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="tiny-text">{table.note}</p>
 
       <button type="button" className="btn btn--dark btn--block btn--tall" onClick={save}><Icon name="check" size={18} width={2.2} /> Сохранить</button>
     </section>

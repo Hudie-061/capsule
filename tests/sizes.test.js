@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { kindOf, slotOf } from "../src/lib/kinds.js";
-import { bodyOrProfile, estimate, fullBody, sizeForKind, sizesFor, sizesSummary } from "../src/lib/sizes.js";
+import { bodyOrProfile, estimate, fullBody, sizeChart, sizeForKind, sizesFor, sizesSummary } from "../src/lib/sizes.js";
 
 describe("sizes", () => {
   it("estimates plausible measurements from height and weight", () => {
@@ -94,5 +94,30 @@ describe("item kinds", () => {
     expect(slotOf({ kind: "cap" })).toBe("head");
     expect(slotOf({ kind: "watch" })).toBe("wrist");
     expect(slotOf({ name: "Коричневая сумка" })).toBe("hand");
+  });
+});
+
+describe("size charts", () => {
+  const man = { gender: "male", height: 180, weight: 75, measured: { chest: 100, waist: 84, inseam: 81, neck: 39, foot: 27 } };
+  const woman = { gender: "female", height: 166, weight: 58, measured: { chest: 86, waist: 68, foot: 24.8 } };
+  const mine = (chart) => chart.rows.filter((r) => r.me).map((r) => r.cells);
+
+  it("marks the user's row in every chart", () => {
+    expect(mine(sizeChart("top", man))).toEqual([["M", "96–103", "48–50", "38–40"]]);
+    expect(mine(sizeChart("bottom", man))).toEqual([["W33", 84, 48]]);
+    expect(mine(sizeChart("shirt", man))).toEqual([[40, "15¾", "M"]]);
+    expect(mine(sizeChart("shoes", man))[0][0]).toBe(43);
+    expect(mine(sizeChart("top", woman))).toEqual([[36, "S", "84–87", 38, 42, 10, 6]]);
+    expect(mine(sizeChart("bottom", woman))[0][0]).toBe(36);
+  });
+
+  it("converts shoe sizes like the usual tables", () => {
+    const row = (eu) => sizeChart("shoes", man).rows.find((r) => r.cells[0] === eu).cells;
+    expect(row(42).slice(0, 4)).toEqual([42, 8, 9, 10]);
+    expect(row(38)[1]).toBe(5);
+    expect(row(45)[1]).toBe(10.5);
+    // a half size is added as its own row
+    const half = sizeChart("shoes", woman);
+    expect(mine(half)[0][0]).toBe(39.5);
   });
 });

@@ -1,151 +1,84 @@
-// Parametric 3D body (owner's choice among the avatar options): built on the device from height,
-// weight and measurements, no per-user 3D model and no server call. three.js is loaded only when
-// this view opens, so the rest of the app stays light. Drag to rotate; the measurement being edited
-// is highlighted on the body (chest, waist and hips rings, neck, shoulders, inside leg, foot).
+// Realistic 3D body (P3·16): the open MakeHuman body (CC0) fitted on the device to height, weight
+// and measurements — see src/lib/body-model.js. No per-user 3D model and no server call. three.js
+// and the model file (~0.8 MB) load only when this view opens. Drag to rotate; the measurement
+// being edited is drawn on the body where a tape would go.
 import { useEffect, useRef, useState } from "react";
+import modelUrl from "./assets/mh-body.bin?url";
+import { fitBody, parseModel } from "./lib/body-model.js";
+import { estimate } from "./lib/sizes.js";
 
-const SKIN = 0xd3c8ba;
+const SKIN = 0xd9cbbb;
+const SUIT = 0x8a7d70; // a plain fitting bodysuit, like the base layer on a fitting avatar
 const ACCENT = 0xa8360a;
 const INK = 0x1e1b18;
 
-// Ellipse semi-axes (width, depth) for a girth with the given width:depth ratio.
-function axes(girth, ratio) {
-  const depth = girth / (2 * Math.PI * Math.sqrt((ratio * ratio + 1) / 2));
-  return [ratio * depth, depth];
+// Skin, with a plain base layer like on fitting avatars: a bodysuit from the top of the thighs to just
+// above the chest, or trunks up to the waist on a male figure. The torso's own width at each height
+// (from the measured slices) keeps the arms out of it.
+function suitColors(THREE, fit, n, H, male) {
+  const skin = new THREE.Color(SKIN);
+  const suit = new THREE.Color(SUIT);
+  const { chest, waist, hips } = fit.rings;
+  const half = (r) => Math.max(...r.points.map((q) => Math.abs(q[0]))) + 1.5;
+  const stops = [[hips.y, half(hips)], [waist.y, half(waist)], [chest.y, half(chest)]];
+  const limit = (y) => {
+    if (y <= stops[0][0]) return stops[0][1];
+    for (let i = 1; i < stops.length; i += 1) {
+      if (y <= stops[i][0]) { const [y0, a] = stops[i - 1]; const [y1, b] = stops[i]; return a + ((b - a) * (y - y0)) / (y1 - y0); }
+    }
+    return stops.at(-1)[1];
+  };
+  const low = fit.crotch[1] - 0.015 * H;
+  const high = male ? waist.y + 0.01 * H : chest.y + 0.035 * H;
+  const colors = new Float32Array(n * 3);
+  const p = fit.positions;
+  for (let i = 0; i < n; i += 1) {
+    const y = p[i * 3 + 1];
+    const c = y >= low && y <= high && Math.abs(p[i * 3]) <= limit(y) ? suit : skin;
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  return colors;
 }
 
-const catmull = (p0, p1, p2, p3, t) => 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (-p0 + 3 * p1 - 3 * p2 + p3) * t * t * t);
-
-// Torso: elliptical rings at anatomical levels, smoothed into one surface.
-function torsoGeometry(THREE, keys) {
-  const per = 8;
-  const seg = 40;
-  const rings = [];
-  for (let i = 0; i < keys.length - 1; i += 1) {
-    const p0 = keys[i - 1] || keys[i]; const p1 = keys[i]; const p2 = keys[i + 1]; const p3 = keys[i + 2] || keys[i + 1];
-    for (let j = 0; j < per; j += 1) {
-      const t = j / per;
-      rings.push([0, 1, 2, 3].map((k) => catmull(p0[k], p1[k], p2[k], p3[k], t)));
-    }
-  }
-  rings.push(keys[keys.length - 1]);
-  const positions = [];
-  for (const [y, a, b, z] of rings) {
-    for (let s = 0; s < seg; s += 1) {
-      const th = (s / seg) * Math.PI * 2;
-      // a slightly flatter back than front
-      const depth = Math.sin(th) > 0 ? b : b * 0.9;
-      positions.push(a * Math.cos(th), y, z + depth * Math.sin(th));
-    }
-  }
-  const bottom = positions.length / 3;
-  positions.push(0, rings[0][0] - 1.5, rings[0][3]);
-  const index = [];
-  for (let r = 0; r < rings.length - 1; r += 1) {
-    for (let s = 0; s < seg; s += 1) {
-      const a = r * seg + s; const b = r * seg + ((s + 1) % seg);
-      const c = (r + 1) * seg + s; const d = (r + 1) * seg + ((s + 1) % seg);
-      index.push(a, c, b, b, c, d);
-    }
-  }
-  for (let s = 0; s < seg; s += 1) index.push(bottom, s, (s + 1) % seg);
+export function buildBody(THREE, model, m) {
+  const fit = fitBody(model, { ...m, shouldersEstimate: estimate(m).shoulders });
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(index);
+  geometry.setAttribute("position", new THREE.BufferAttribute(fit.positions, 3));
+  const index = new Uint16Array(model.body.length + model.eyes.length);
+  index.set(model.body); index.set(model.eyes, model.body.length);
+  geometry.setIndex(new THREE.BufferAttribute(index, 1));
   geometry.computeVertexNormals();
-  return geometry;
-}
-
-const lathe = (THREE, points) => new THREE.LatheGeometry(points.map(([r, y]) => new THREE.Vector2(Math.max(0.1, r), y)), 32);
-
-class EllipseRing {
-  constructor(THREE, y, a, b, z) { this.curve = new (class extends THREE.Curve { getPoint(t, out = new THREE.Vector3()) { const th = t * Math.PI * 2; return out.set(a * Math.cos(th), y, z + b * Math.sin(th)); } })(); }
-}
-
-export function buildBody(THREE, m) {
-  const H = m.height;
-  const f = m.gender === "female";
-  const k = H / 175;
-  const bmi = m.weight / ((H / 100) ** 2);
-  const fat = Math.sqrt(Math.min(1.6, Math.max(0.7, bmi / 22)));
-  const crotch = Math.min(0.52 * H, Math.max(0.4 * H, m.inseam));
-  const y = { hips: crotch + 0.06 * H, waist: (f ? 0.625 : 0.615) * H, chest: 0.725 * H, armpit: 0.755 * H, shoulder: 0.815 * H, neck: 0.838 * H, chin: 0.872 * H, head: 0.93 * H, elbow: 0.63 * H, wrist: 0.485 * H };
-  const [hA, hB] = axes(m.hips, f ? 1.32 : 1.28);
-  const [wA, wB] = axes(m.waist, f ? 1.32 : 1.22);
-  const [cA, cB] = axes(m.chest, f ? 1.3 : 1.38);
-  const neckR = m.neck / (2 * Math.PI);
-  const sh = m.shoulders / 2;
-  const material = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.86, metalness: 0 });
+  geometry.setAttribute("color", new THREE.BufferAttribute(suitColors(THREE, fit, model.n, m.height, m.gender === "male"), 3));
   const body = new THREE.Group();
-  const add = (geometry, x = 0, yy = 0, z = 0) => { const mesh = new THREE.Mesh(geometry, material); mesh.position.set(x, yy, z); body.add(mesh); return mesh; };
+  body.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.78, metalness: 0 })));
 
-  // torso: [height, half width, half depth, forward offset]
-  add(torsoGeometry(THREE, [
-    [crotch - 4, hA * 0.78, hB * 0.7, -0.5],
-    [y.hips, hA, hB, -1.2],
-    [(y.hips + y.waist) / 2, (hA + wA) / 2, (hB + wB) / 2, -0.6],
-    [y.waist, wA, wB, 0],
-    [y.chest, cA, cB, f ? 1.8 : 0.6],
-    [y.armpit, Math.max(cA * 0.97, sh * 0.84), cB * 0.92, 0.3],
-    [y.shoulder, sh * 0.8, cB * 0.68, 0],
-    [y.neck, neckR * 1.5, neckR * 1.35, 0],
-    [y.neck + 1.5, neckR * 1.02, neckR, 0],
-  ]));
-
-  // legs
-  const thigh = (0.6 * m.hips) / (2 * Math.PI);
-  const legX = hA * 0.5;
-  for (const side of [-1, 1]) {
-    add(lathe(THREE, [[3.4 * k, 0.03 * H], [3.6 * k, 0.055 * H], [6 * k * fat, 0.19 * H], [5.4 * k * Math.sqrt(fat), 0.285 * H], [thigh * 0.84, 0.37 * H], [thigh, crotch - 1], [thigh * 1.02, crotch + 6], [thigh * 0.7, crotch + 13]]), side * legX, 0, 0); // the top blends into the hips
-    const foot = add(new THREE.SphereGeometry(1, 24, 14), side * legX, 3.6 * k, m.foot * 0.2);
-    foot.scale.set(m.foot * 0.19, 4.2 * k, m.foot * 0.5);
-  }
-
-  // arms, slightly away from the body
-  const upper = (f ? 4.1 : 4.7) * k * Math.pow(fat, 0.7);
-  for (const side of [-1, 1]) {
-    const arm = new THREE.Group();
-    arm.position.set(side * (sh - 1.2), y.shoulder - 3, 0);
-    arm.rotation.z = side * 0.09;
-    const len1 = y.shoulder - 3 - y.elbow;
-    const len2 = y.elbow - y.wrist;
-    const meshes = [
-      [lathe(THREE, [[upper * 0.82, -len1], [upper, -len1 * 0.5], [upper * 1.05, 0]]), 0],
-      [lathe(THREE, [[upper * 0.58, -len1 - len2], [upper * 0.8, -len1 - len2 * 0.4], [upper * 0.84, -len1]]), 0],
-    ];
-    for (const [geometry] of meshes) arm.add(new THREE.Mesh(geometry, material));
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(upper * 1.15, 20, 14), material);
-    arm.add(cap);
-    const hand = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), material);
-    hand.scale.set(2.3 * k, 8.4 * k, 4.2 * k);
-    hand.position.y = -len1 - len2 - 7 * k;
-    arm.add(hand);
-    body.add(arm);
-  }
-
-  // neck and head
-  add(new THREE.CylinderGeometry(neckR * 0.95, neckR, y.chin - y.neck + 4, 24), 0, (y.neck + y.chin) / 2, 0);
-  const head = add(new THREE.SphereGeometry(1, 32, 24), 0, y.head, 0.6);
-  head.scale.set(7.8 * k * (f ? 0.96 : 1), 11.6 * k, 9.6 * k);
-
-  // where each measurement is taken
-  const tube = (curve, closed = false) => new THREE.TubeGeometry(curve, 72, 0.45, 8, closed);
+  // tape lines, a little off the skin
+  const v = (p) => new THREE.Vector3(p[0], p[1], p[2]);
+  const ring = ({ y, points }) => {
+    const cx = points.reduce((a, q) => a + q[0], 0) / points.length;
+    const cz = points.reduce((a, q) => a + q[1], 0) / points.length;
+    return new THREE.CatmullRomCurve3(points.map(([x, z]) => new THREE.Vector3(cx + (x - cx) * 1.025, y, cz + (z - cz) * 1.025)), true, "centripetal");
+  };
+  const [ls, rs] = fit.shoulders;
+  const neck = fit.rings.neck;
+  const back = Math.min(...neck.points.map((q) => q[1])) - 1;
+  const tube = (curve, closed = false) => new THREE.TubeGeometry(curve, 96, 0.4, 8, closed);
   const marks = {
-    chest: tube(new EllipseRing(THREE, y.chest, cA * 1.04, cB * 1.06, f ? 1.8 : 0.6).curve, true),
-    waist: tube(new EllipseRing(THREE, y.waist, wA * 1.04, wB * 1.06, 0).curve, true),
-    hips: tube(new EllipseRing(THREE, y.hips, hA * 1.04, hB * 1.06, -1.2).curve, true),
-    neck: tube(new EllipseRing(THREE, y.neck + 1.5, neckR * 1.15, neckR * 1.12, 0).curve, true),
-    shoulders: tube(new THREE.CatmullRomCurve3([new THREE.Vector3(-sh, y.shoulder - 2, -cB * 0.4), new THREE.Vector3(0, y.shoulder + 1, -cB * 0.75), new THREE.Vector3(sh, y.shoulder - 2, -cB * 0.4)])),
-    inseam: tube(new THREE.LineCurve3(new THREE.Vector3(-legX + thigh * 0.85, crotch - 1, 1), new THREE.Vector3(-legX + 3.6 * k, 0.5, 1))),
-    foot: tube(new THREE.LineCurve3(new THREE.Vector3(legX + m.foot * 0.22, 0.6, -m.foot * 0.3), new THREE.Vector3(legX + m.foot * 0.22, 0.6, m.foot * 0.7))),
+    chest: tube(ring(fit.rings.chest), true),
+    waist: tube(ring(fit.rings.waist), true),
+    hips: tube(ring(fit.rings.hips), true),
+    neck: tube(ring(neck), true),
+    shoulders: tube(new THREE.CatmullRomCurve3([v([ls[0], ls[1] + 0.6, ls[2] - 1]), new THREE.Vector3(0, neck.y - 2, back), v([rs[0], rs[1] + 0.6, rs[2] - 1])])),
+    inseam: tube(new THREE.LineCurve3(v([fit.inseam[0][0] + 1, fit.inseam[0][1] - 0.5, fit.inseam[0][2] + 1]), v([fit.inseam[1][0] - 0.6, fit.inseam[1][1], fit.inseam[1][2] + 1]))),
+    foot: tube(new THREE.LineCurve3(v(fit.foot[0]), v(fit.foot[1]))),
   };
   const markMeshes = {};
-  for (const [id, geometry] of Object.entries(marks)) {
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.22 }));
+  for (const [id, g] of Object.entries(marks)) {
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.22 }));
     markMeshes[id] = mesh;
     body.add(mesh);
   }
-  return { body, marks: markMeshes, height: H };
+  return { body, marks: markMeshes, height: m.height };
 }
 
 function dispose(object) {
@@ -155,7 +88,7 @@ function dispose(object) {
 function rebuild(state, props) {
   if (!props.values) return;
   if (state.model) { state.pivot.remove(state.model.body); dispose(state.model.body); }
-  state.model = buildBody(state.THREE, { gender: props.gender, height: Number(props.height) || 175, weight: Number(props.weight) || 70, ...props.values });
+  state.model = buildBody(state.THREE, state.mesh, { gender: props.gender, height: Number(props.height) || 175, weight: Number(props.weight) || 70, ...props.values });
   state.pivot.add(state.model.body);
   const H = state.model.height;
   state.camera.position.set(0, H * 0.54, H * 2.75);
@@ -165,8 +98,11 @@ function rebuild(state, props) {
 }
 
 // The measurement being edited glows in the accent colour; chest, waist and hips stay faintly visible.
-function highlight(state, focus) {
+// The body turns to where that tape is easiest to see: the back for shoulders, the side for the foot.
+const VIEW = { shoulders: Math.PI, foot: Math.PI / 2 }; // the foot tape runs along the outer side of the right foot
+function highlight(state, focus, turn = false) {
   if (!state?.model) return;
+  if (turn) { state.auto = false; state.turnTo = VIEW[focus] ?? 0; }
   for (const [id, mesh] of Object.entries(state.model.marks)) {
     const on = id === focus;
     mesh.material.color.setHex(on ? ACCENT : INK);
@@ -188,8 +124,10 @@ export function Body3D({ gender, height, weight, values, focus }) {
     let frame = 0;
     let observer;
     (async () => {
-      let THREE;
-      try { THREE = await import("three"); } catch { setError("Не удалось загрузить 3D."); return; }
+      let THREE; let mesh;
+      try {
+        [THREE, mesh] = await Promise.all([import("three"), fetch(modelUrl).then((r) => { if (!r.ok) throw new Error(); return r.arrayBuffer(); }).then(parseModel)]);
+      } catch { setError("Не удалось загрузить 3D-модель. Проверь интернет и открой экран ещё раз."); return; }
       if (!alive || !hostRef.current) return;
       let renderer;
       try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); } catch { setError("3D не поддерживается на этом устройстве."); return; }
@@ -209,7 +147,7 @@ export function Body3D({ gender, height, weight, values, focus }) {
       shadow.rotation.x = -Math.PI / 2;
       shadow.position.y = 0.2;
       scene.add(shadow);
-      const state = { THREE, renderer, scene, camera, pivot, shadow, model: null, auto: true, drag: null };
+      const state = { THREE, mesh, renderer, scene, camera, pivot, shadow, model: null, auto: true, drag: null, pending: 0 };
       stateRef.current = state;
 
       const resize = () => {
@@ -227,7 +165,7 @@ export function Body3D({ gender, height, weight, values, focus }) {
 
       const canvas = renderer.domElement;
       canvas.style.touchAction = "pan-y";
-      canvas.addEventListener("pointerdown", (e) => { state.auto = false; state.drag = { x: e.clientX, r: pivot.rotation.y }; canvas.setPointerCapture?.(e.pointerId); });
+      canvas.addEventListener("pointerdown", (e) => { state.auto = false; state.turnTo = null; state.drag = { x: e.clientX, r: pivot.rotation.y }; canvas.setPointerCapture?.(e.pointerId); });
       canvas.addEventListener("pointermove", (e) => { if (state.drag) pivot.rotation.y = state.drag.r + (e.clientX - state.drag.x) * 0.012; });
       const stop = () => { state.drag = null; };
       canvas.addEventListener("pointerup", stop);
@@ -238,6 +176,11 @@ export function Body3D({ gender, height, weight, values, focus }) {
         frame = requestAnimationFrame(loop);
         if (document.hidden) return;
         if (state.auto) pivot.rotation.y += 0.004;
+        else if (state.turnTo != null && !state.drag) {
+          const diff = Math.atan2(Math.sin(state.turnTo - pivot.rotation.y), Math.cos(state.turnTo - pivot.rotation.y));
+          pivot.rotation.y += diff * 0.12;
+          if (Math.abs(diff) < 0.005) state.turnTo = null;
+        }
         renderer.render(scene, camera);
       };
       loop();
@@ -252,8 +195,12 @@ export function Body3D({ gender, height, weight, values, focus }) {
     };
   }, []);
 
-  useEffect(() => { if (stateRef.current) rebuild(stateRef.current, propsRef.current); }, [shapeKey]);
-  useEffect(() => { highlight(stateRef.current, focus); }, [focus]);
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state || state.pending) return;
+    state.pending = requestAnimationFrame(() => { state.pending = 0; if (stateRef.current === state) rebuild(state, propsRef.current); });
+  }, [shapeKey]);
+  useEffect(() => { highlight(stateRef.current, focus, true); }, [focus]);
 
   return (
     <div className="body3d" ref={hostRef} aria-label="3D-фигура по твоим меркам. Потяни, чтобы повернуть." role="img">

@@ -141,3 +141,84 @@ export function sizesSummary(body) {
   const s = Object.fromEntries(sizesFor(body).map((x) => [x.id, x.value]));
   return `верх ${s.top}, джинсы ${s.jeans}, обувь ${s.shoes}`;
 }
+
+// Full size charts with conversions, and the user's row. Sources of the conventions: EN 13402
+// (letters by chest, trousers by waist), German/French/Italian/UK/US women's equivalents
+// (DE 34 = FR 36 = IT 40 = UK 8 = US 4), men's jacket sizes as half the chest, Paris points for
+// EU shoes (⅔ cm) and barleycorns for UK shoes (⅓ inch, adult UK 0 = 25 barleycorns of last).
+const range = (a, b) => (a === b ? `${a}` : `${a}–${b}`);
+const half = (v) => Math.round(v * 2) / 2;
+const shoeUk = (eu) => half((3 * (eu / 1.5)) / 2.54 - 25);
+const COLLARS = [[37, "14½", "S"], [38, "15", "S"], [39, "15½", "M"], [40, "15¾", "M"], [41, "16", "L"], [42, "16½", "L"], [43, "17", "XL"], [44, "17½", "XL"], [45, "17¾", "XXL"], [46, "18", "XXL"]];
+const MEN_W = [28, 29, 30, 31, 32, 33, 34, 36, 38, 40];
+
+export const CHARTS = [
+  { id: "top", label: "Верх" },
+  { id: "bottom", label: "Низ" },
+  { id: "shirt", label: "Рубашки", male: true },
+  { id: "shoes", label: "Обувь" },
+];
+
+export function sizeChart(id, body) {
+  const n = sizeNumbers(body || {});
+  if (id === "top" && !n.f) {
+    const limits = [80, 88, 96, 104, 112, 120, 128, 136];
+    return {
+      columns: ["Размер", "Грудь, см", "EU", "UK / US"],
+      rows: LETTERS.map((letter, i) => {
+        const [lo, hi] = [limits[i], limits[i + 1]];
+        return { me: i === n.top, cells: [letter, range(lo, hi - 1), range(lo / 2, hi / 2 - 2), range(Math.round(lo / 2.54), Math.round(hi / 2.54) - 1)] };
+      }),
+      note: "EU — размер пиджаков и курток: половина обхвата груди. UK/US — обхват груди в дюймах.",
+    };
+  }
+  if (id === "top") {
+    return {
+      columns: ["EU", "Размер", "Грудь, см", "FR", "IT", "UK", "US"],
+      rows: [32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52].map((eu) => {
+        const lo = 80 + 2 * (eu - 34);
+        return { me: eu === n.euTop, cells: [eu, LETTERS[letterFor(lo, true)], range(lo, lo + 3), eu + 2, eu + 6, eu - 26, eu - 30] };
+      }),
+      note: "EU здесь — немецкая сетка (DE). Французская на 2 больше, итальянская на 6.",
+    };
+  }
+  if (id === "bottom" && !n.f) {
+    return {
+      columns: ["Джинсы", "Талия, см", "Брюки EU"],
+      rows: MEN_W.map((w) => {
+        const waist = w * 2.54;
+        return { me: w === nearest(n.w, MEN_W), cells: [`W${w}`, Math.round(waist), 2 * Math.round((waist / 2 + 6) / 2)] };
+      }),
+      note: `Длина L — внутренний шов в дюймах: L30 ≈ 76 см, L32 ≈ 81 см, L34 ≈ 86 см. Твоя — L${n.l}.`,
+    };
+  }
+  if (id === "bottom") {
+    return {
+      columns: ["EU", "Талия, см", "Джинсы", "FR", "IT", "UK", "US"],
+      rows: [32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52].map((eu) => {
+        const lo = 64 + 2 * (eu - 34);
+        return { me: eu === n.euTrousers, cells: [eu, range(lo, lo + 3), range(`W${Math.round(lo / 2.54)}`, `W${Math.round((lo + 3) / 2.54)}`), eu + 2, eu + 6, eu - 26, eu - 30] };
+      }),
+      note: `Длина джинсов L — внутренний шов в дюймах. Твоя — L${n.l}.`,
+    };
+  }
+  if (id === "shirt") {
+    return {
+      columns: ["Ворот, см", "Дюймы", "Размер"],
+      rows: COLLARS.map(([cm, inch, letter]) => ({ me: cm === Math.min(46, Math.max(37, n.collar)), cells: [cm, inch, letter] })),
+      note: "Ворот = обхват шеи + 1 см на свободу.",
+    };
+  }
+  // shoes: whole sizes, plus the user's half size when it is one
+  const sizes = [35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48];
+  if (!sizes.includes(n.shoeEu)) sizes.push(n.shoeEu);
+  sizes.sort((a, b) => a - b);
+  return {
+    columns: ["EU", "UK", "US муж.", "US жен.", "Стопа, см"],
+    rows: sizes.map((eu) => {
+      const uk = shoeUk(eu);
+      return { me: eu === n.shoeEu, cells: [eu, uk, uk + 1, uk + 2, (eu / 1.5 - 1.5).toFixed(1)] };
+    }),
+    note: "У брендов бывает расхождение на полразмера: сверяйся с длиной стопы в таблице магазина.",
+  };
+}

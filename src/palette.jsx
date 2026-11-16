@@ -1,9 +1,12 @@
 // «Моя палитра» (design/V2-Palette.dc.html): colour type from one selfie.
-// The selfie is sent once to the `palette` task and is not stored; only the result is kept on the device.
+// The selfie is sent once to the `palette` task; the Worker keeps nothing. A small copy stays on the
+// device (IndexedDB) to show the face next to the colours, like a colour analyst's drape: one of the
+// best colours against one to avoid. «Удалить фото» removes it; the palette stays.
 import { useEffect, useRef, useState } from "react";
 import { formatShortDate, getPalette, savePalette } from "./lib/daily.js";
+import { blobs } from "./lib/db.js";
 import { paletteTask } from "./lib/gemini.js";
-import { normalizeImage } from "./lib/image.js";
+import { canvasToBlob, loadBitmap, makeCanvas, normalizeImage } from "./lib/image.js";
 import { getProfile, saveProfile } from "./lib/settings.js";
 import { Icon, Segmented } from "./ui.jsx";
 
@@ -38,6 +41,18 @@ async function storyImage(p) {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
 }
 
+const SELFIE = "palette-selfie";
+
+// A 512 px JPEG is plenty for a circle on screen.
+async function smallSelfie(file) {
+  const bitmap = await loadBitmap(file);
+  const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
+  const canvas = makeCanvas(Math.round(bitmap.width * scale), Math.round(bitmap.height * scale));
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return canvasToBlob(canvas, "image/jpeg", 0.85);
+}
+
 function paletteText(p) {
   return `${p.season}: ${p.best.map((c) => c.name.toLowerCase()).join(", ")}${p.avoid.length ? `; у лица избегать: ${p.avoid.map((c) => c.name.toLowerCase()).join(", ")}` : ""}`;
 }
@@ -49,10 +64,16 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [story, setStory] = useState(null);
+  const [selfie, setSelfie] = useState(null);
+  const [drape, setDrape] = useState({ best: 0, avoid: 0 });
   const fileRef = useRef(null);
 
-  useEffect(() => { getPalette().then((value) => { setSaved(value); setLoaded(true); }); }, []);
+  useEffect(() => {
+    getPalette().then((value) => { setSaved(value); setLoaded(true); });
+    blobs.get(SELFIE).then((blob) => { if (blob) setSelfie(URL.createObjectURL(blob)); }).catch(() => {});
+  }, []);
   useEffect(() => () => { if (story) URL.revokeObjectURL(story); }, [story]);
+  useEffect(() => () => { if (selfie) URL.revokeObjectURL(selfie); }, [selfie]);
 
   const analyse = async (file) => {
     setBusy(true); setError("");
@@ -60,6 +81,12 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
       const selfie = await normalizeImage(file, 1024);
       const result = await paletteTask(selfie);
       setSaved(await savePalette(result));
+      setDrape({ best: 0, avoid: 0 });
+      try {
+        const small = await smallSelfie(file);
+        await blobs.set(SELFIE, small);
+        setSelfie(URL.createObjectURL(small));
+      } catch { /* the palette works without the photo */ }
       // The stylist reads «Цвета, которые идут» from the profile, so outfits and shopping use the palette too.
       const profile = await getProfile();
       await saveProfile({ ...profile, palette: paletteText(result) });
@@ -68,6 +95,11 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
     } finally {
       setBusy(false);
     }
+  };
+
+  const removeSelfie = async () => {
+    await blobs.del(SELFIE);
+    setSelfie(null);
   };
 
   const share = async () => {
@@ -95,7 +127,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
         <div className="palette-card palette-card--intro rise">
           <span className="palette-card__avatar"><Icon name="camera" size={28} color="#CFC6BA" /></span>
           <span className="palette-card__season">{busy ? "Смотрю на цвета…" : "Узнай свой цветотип"}</span>
-          <span className="palette-card__muted">{busy ? "Это займёт несколько секунд." : "Одно селфи — и я подберу цвета одежды, которые тебе идут, и металлы для украшений. Селфи не сохраняется."}</span>
+          <span className="palette-card__muted">{busy ? "Это займёт несколько секунд." : "Одно селфи — и я подберу цвета одежды, которые тебе идут, и металлы для украшений. Фото останется только на телефоне, чтобы показать цвета рядом с лицом."}</span>
           {busy ? <span className="shimmer shimmer--dark palette-skeleton" /> : setupReady ? (
             <button type="button" className="btn btn--light" onClick={() => fileRef.current?.click()}>Сделать селфи</button>
           ) : <button type="button" className="btn btn--light" onClick={onOpenAccess}>Сначала введи код доступа</button>}
@@ -105,7 +137,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
       ) : (
         <div className="palette-card rise">
           <div className="palette-card__head">
-            <span className="palette-card__avatar" style={{ borderColor: p.metal?.good?.[0] || "#C9A24A" }}><Icon name="profile" size={28} color="#CFC6BA" /></span>
+            <span className="palette-card__avatar" style={{ borderColor: p.metal?.good?.[0] || "#C9A24A" }}>{selfie ? <img src={selfie} alt="Твоё селфи" /> : <Icon name="profile" size={28} color="#CFC6BA" />}</span>
             <div className="palette-card__heading">
               <span className="palette-card__season">{p.season}</span>
               <span className="palette-card__muted">{[p.undertone, p.contrast].filter(Boolean).join(" · ")}</span>
@@ -114,13 +146,29 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
           <Segmented role="tablist" tone="dark" label="Раздел палитры" value={tab} onChange={setTab} options={[{ id: "colors", label: "Цвета" }, { id: "jewel", label: "Металлы и украшения" }]} />
           {tab === "colors" ? (
             <div className="palette-section">
-              <span className="palette-card__label">Твои лучшие цвета</span>
+              {selfie ? (
+                <div className="drape-row" aria-label="Цвета рядом с лицом">
+                  <figure className="drape">
+                    <span className="drape__face" style={{ "--drape": p.best[drape.best]?.hex }}><img src={selfie} alt="" /></span>
+                    <figcaption><span className="strong-text">{p.best[drape.best]?.name}</span><span className="palette-card__muted">идёт</span></figcaption>
+                  </figure>
+                  {p.avoid.length > 0 && (
+                    <figure className="drape">
+                      <span className="drape__face" style={{ "--drape": p.avoid[drape.avoid]?.hex }}><img src={selfie} alt="" /></span>
+                      <figcaption><span className="strong-text">{p.avoid[drape.avoid]?.name}</span><span className="palette-card__muted">хуже у лица</span></figcaption>
+                    </figure>
+                  )}
+                </div>
+              ) : (
+                <button type="button" className="drape-hint" onClick={() => fileRef.current?.click()}><Icon name="camera" size={16} width={2} /> Новое селфи — покажу цвета рядом с лицом</button>
+              )}
+              <span className="palette-card__label">Твои лучшие цвета{selfie ? " · нажми, чтобы примерить" : ""}</span>
               <div className="swatch-grid">
                 {p.best.map((c, i) => (
-                  <div key={c.hex + i} className="swatch pop" style={{ animationDelay: `${i * 0.04}s` }}>
+                  <button type="button" key={c.hex + i} className={`swatch pop${selfie && drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} disabled={!selfie} aria-pressed={selfie ? drape.best === i : undefined} onClick={() => setDrape({ ...drape, best: i })}>
                     <span className="swatch__color" style={{ background: c.hex }} />
                     <span className="swatch__name">{c.name}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
               {p.avoid.length > 0 && (
@@ -128,12 +176,12 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
                   <span className="palette-card__label">Лучше избегать у лица</span>
                   <div className="swatch-grid">
                     {p.avoid.map((c, i) => (
-                      <div key={c.hex + i} className="swatch">
+                      <button type="button" key={c.hex + i} className={`swatch${selfie && drape.avoid === i ? " is-on" : ""}`} disabled={!selfie} aria-pressed={selfie ? drape.avoid === i : undefined} onClick={() => setDrape({ ...drape, avoid: i })}>
                         <span className="swatch__color swatch__color--avoid" style={{ background: c.hex }}>
                           <svg aria-hidden="true" width="100%" height="100%" viewBox="0 0 70 34" preserveAspectRatio="none"><path d="M0 34 L70 0" stroke="#1E1B18" strokeWidth="3" /></svg>
                         </span>
                         <span className="swatch__name swatch__name--muted">{c.name}</span>
-                      </div>
+                      </button>
                     ))}
                   </div>
                 </>
@@ -163,7 +211,13 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               ))}
             </div>
           )}
-          <span className="palette-card__foot"><span className="palette-card__brand">Капсула</span><button type="button" className="text-button text-button--dark" onClick={() => fileRef.current?.click()}>Новое селфи</button></span>
+          <span className="palette-card__foot">
+            <span className="palette-card__brand">Капсула</span>
+            <span className="row-gap">
+              {selfie && <button type="button" className="text-button text-button--dark" onClick={removeSelfie}>Удалить фото</button>}
+              <button type="button" className="text-button text-button--dark" onClick={() => fileRef.current?.click()}>Новое селфи</button>
+            </span>
+          </span>
         </div>
       )}
 
