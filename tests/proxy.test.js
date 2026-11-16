@@ -217,6 +217,33 @@ describe("no general-purpose access", () => {
     expect(res.status).toBe(422);
   });
 
+  it("try-on: identity only from the person photo, exact garment list in layer order, fixed pose", async () => {
+    const hoodie = { mimeType: "image/png", data: "SE9PRElF" };
+    const tee = { mimeType: "image/png", data: "VEVF" };
+    const res = await worker.fetch(call("/api/tryon", {
+      person: PNG, garments: [hoodie, tee], tuck: false,
+      items: [{ id: "h", name: "Серое худи", part: "wholebody_up", color: "#a9a39b", tags: ["оверсайз"] }, { id: "t", name: "Тёмно-серая футболка", part: "upperbody", color: "#333333" }],
+    }), env());
+    expect(res.status).toBe(200);
+    const { prompt, body } = upstream.find((c) => c.url.includes("flash-image"));
+    expect(prompt).toMatch(/ONLY for identity/);
+    expect(prompt).toMatch(/IGNORE every garment/);
+    expect(prompt).toMatch(/arms relaxed straight down/);
+    expect(prompt).toContain('2. image 2 — top: "Тёмно-серая футболка"');
+    expect(prompt).toContain('3. image 3 — outerwear');
+    expect(prompt).toContain("No shoes are given");
+    const images = body.contents[0].parts.slice(1).map((p) => p.inlineData.data);
+    expect(images).toEqual([PNG.data, tee.data, hoodie.data]); // person, then garments in the listed order
+  });
+
+  it("try-on still works for older app versions that send no garment names", async () => {
+    const res = await worker.fetch(call("/api/tryon", { person: PNG, garments: [PNG] }), env());
+    expect(res.status).toBe(200);
+    const { prompt } = upstream.find((c) => c.url.includes("flash-image"));
+    expect(prompt).toContain("one garment of the outfit");
+    expect(prompt).not.toContain("No shoes are given");
+  });
+
   it("validates images", async () => {
     expect((await worker.fetch(call("/api/detect", { image: { mimeType: "text/html", data: "PHNjcmlwdD4=" } }), env())).status).toBe(400);
     expect((await worker.fetch(call("/api/tryon", { person: PNG, garments: [] }), env())).status).toBe(400);

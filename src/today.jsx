@@ -112,6 +112,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const [occasionDraft, setOccasionDraft] = useState("");
   const [likeAt, setLikeAt] = useState(null);
   const [likeReasons, setLikeReasons] = useState(new Set());
+  const [zoom, setZoom] = useState(null);
   const photoRef = useRef(null);
   const ticketRef = useRef(0); // ignores a slow plan request after the day was switched
 
@@ -266,8 +267,9 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
         reference = await getModelReference();
       }
       if (!reference) throw new Error("Сначала выбери своё фото в полный рост.");
-      const garments = await Promise.all(pieces.slice(0, 5).map((p) => fetch(p.image).then((r) => r.blob())));
-      const blob = await tryOnOutfit({ person: reference, garments, tuck: outfit?.tuck });
+      const worn = pieces.slice(0, 5);
+      const garments = await Promise.all(worn.map((p) => fetch(p.image).then((r) => r.blob())));
+      const blob = await tryOnOutfit({ person: reference, garments, items: worn, tuck: outfit?.tuck });
       await saveTryOn(pieces.map((p) => p.id), blob);
       setTryon({ status: "done", url: URL.createObjectURL(blob), error: "" });
     } catch (e) {
@@ -389,7 +391,9 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
               )}
               {me && tryon.status === "done" && (
                 <>
-                  <img className="stage__photo fade" src={tryon.url} alt="ИИ-примерка образа на тебе" />
+                  <button type="button" className="stage__photo-button" onClick={() => setZoom(tryon.url)} aria-label="Открыть примерку на весь экран">
+                    <img className="stage__photo fade" src={tryon.url} alt="ИИ-примерка образа на тебе" />
+                  </button>
                   <button type="button" className="stage__caption stage__caption--button" onClick={() => runTryOn()}>Примерить заново</button>
                 </>
               )}
@@ -401,6 +405,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                   <span className="upload-box__icon"><Icon name="camera" size={28} /></span>
                   <span className="card-title">Примерь на себе</span>
                   <span className="muted-text">{hasReference ? "Твоё фото уже есть. Одна примерка — одна картинка из дневного лимита." : "Загрузи одно фото в полный рост — ИИ наденет на тебя этот образ"}</span>
+                  {!hasReference && <span className="tiny-text">Лучше всего: стоя прямо, лицом к камере, руки вдоль тела, хороший свет, простая одежда.</span>}
                   {hasReference ? (
                     <div className="row-gap">
                       <button type="button" className="btn btn--dark" onClick={() => runTryOn()}>Примерить</button>
@@ -441,6 +446,13 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
         </>
       )}
 
+      {zoom && (
+        <div className="photo-viewer fade" role="dialog" aria-modal="true" aria-label="Примерка на весь экран">
+          <img src={zoom} alt="ИИ-примерка образа на тебе" />
+          <button type="button" className="btn btn--light btn--small" onClick={() => setZoom(null)}>Закрыть</button>
+        </div>
+      )}
+
       <Sheet open={Boolean(swapping)} onClose={() => setSwapId(null)} title={swapping ? (isDressItem(swapping) ? "Заменить платье" : SWAP_TITLE[swapping.part]) : ""} subtitle="Из твоего гардероба · той же категории">
         <div className="alt-grid">
           {alternatives.map((alt, i) => {
@@ -453,7 +465,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                 </span>
                 <span className="alt-card__text">
                   <span className="strong-text">{alt.name}</span>
-                  <span className="tiny-text">{(alt.tags || []).slice(0, 2).join(", ") || " "}</span>
+                  <span className="tiny-text">{[alt.brand, ...(alt.tags || []).slice(0, 2)].filter(Boolean).join(" · ") || " "}</span>
                 </span>
               </button>
             );

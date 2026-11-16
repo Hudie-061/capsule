@@ -111,6 +111,7 @@ function item(value) {
     color: HEX.test(v.color || "") ? v.color : "#808080",
     secondaryColor: HEX.test(v.secondaryColor || "") ? v.secondaryColor : undefined,
     tags: Array.isArray(v.tags) ? v.tags.slice(0, 6).map((t) => text(t, 30)).filter(Boolean) : [],
+    brand: text(v.brand, 40) || undefined,
   };
 }
 
@@ -228,12 +229,39 @@ Composition: centred straight-on product view, entire garment inside the frame w
 Background: perfectly flat, uniform solid ${chromaKey} chroma-key colour edge to edge. No shadows, gradients, texture, floor, reflections or lighting variation. Use no ${chromaKey} anywhere in the garment. Exactly one garment with a crisp, separable outer silhouette. No text, no other objects.${direction ? `\nUser adjustment about this garment (apply only if it concerns the garment's look): "${direction}"` : ""}`;
 }
 
-const MODELED_PROMPT = "Create a professional horizontal 3:2 editorial fashion photograph of the person in the first image wearing the exact garment from the second image. Preserve the person's recognizable identity, face, hair, age, build and proportions. Preserve every garment color, material, fit, construction, graphic, logo and distinctive detail. Keep the complete featured item clearly visible and unobstructed, use understated neutral supporting clothes, realistic anatomy, natural light, authentic fabric and a tasteful real-world setting. Fully clothed, everyday fashion photo. No text, watermark or synthetic look.";
+const MODELED_PROMPT = "Create a professional horizontal 3:2 editorial fashion photograph of the person in the first image wearing the exact garment from the second image. Use the first image ONLY for the person's identity (face, hair, skin tone, build and proportions); ignore the clothes they wear in it. Preserve the person's recognizable identity, face, hair, age, build and proportions. Preserve every garment color, material, fit, construction, graphic, logo and distinctive detail. Keep the complete featured item clearly visible and unobstructed, use understated neutral supporting clothes, realistic anatomy, natural light, authentic fabric and a tasteful real-world setting. Fully clothed, everyday fashion photo. No text, watermark or synthetic look.";
 
-const TRYON_PROMPT = "Create a realistic full-length editorial fashion photograph (portrait 2:3) of the person in the FIRST image wearing ALL the garments shown in the following images together as one outfit. Preserve the person's face, hair, build and proportions exactly. Preserve each garment's exact colour, fit, length, fabric and details. Natural pose, fully clothed, full body head to shoes, simple real-world setting, natural light. No text, no watermark.";
+// Virtual fitting room: the same pose, framing and studio background for every outfit, so outfits can be
+// compared; the reference photo gives only the identity, never its clothes.
+const LAYER = { wholebody_up: "outerwear (worn over the top, open or closed as in its image)", upperbody: "top", lowerbody: "bottom", shoes: "shoes", accessories_up: "accessory" };
+const LAYER_ORDER = { upperbody: 0, wholebody_up: 1, lowerbody: 2, shoes: 3, accessories_up: 4 };
+
+function tryOnPrompt(pieces, tuck) {
+  const dress = (p) => p.part === "wholebody_up" && /dress|jumpsuit|платье|сарафан|комбинезон/i.test(`${p.name} ${p.tags.join(" ")}`);
+  const lines = pieces.map((p, i) => (p.unknown
+    ? `${i + 2}. image ${i + 2} — one garment of the outfit`
+    : `${i + 2}. image ${i + 2} — ${dress(p) ? "dress" : LAYER[p.part]}: "${p.name}", main colour ${p.color}${p.secondaryColor ? ` and ${p.secondaryColor}` : ""}${p.tags.length ? `, ${p.tags.join(", ")}` : ""}`));
+  const parts = pieces.map((p) => p.part);
+  const hasTop = parts.includes("upperbody");
+  const extras = pieces.some((p) => p.unknown) ? "" : [
+    parts.includes("shoes") ? "" : "No shoes are given: use plain minimal sneakers in a neutral colour that match the outfit.",
+    parts.includes("lowerbody") || pieces.some(dress) ? "" : "No bottom is given: use plain straight trousers in a neutral colour.",
+  ].filter(Boolean).join(" ");
+  return `Virtual fitting room. Create ONE photorealistic full-length catalogue photo, portrait 2:3.
+
+PERSON — image 1. Use it ONLY for identity: the same face and facial features, hairstyle, skin tone, body shape and proportions. Keep the face natural, sharp and clearly the same person. IGNORE every garment, shoe and accessory the person wears in image 1: none of their own clothes may appear in the result.
+
+GARMENTS — dress the person in exactly these pieces and nothing else:
+${lines.join("\n")}
+Each piece must look exactly like its own image: the same colour and shade, pattern, length, fit and silhouette (oversized stays oversized, slim stays slim), fabric, neckline, sleeves, fastenings, graphics and details. Do not add, remove, swap, recolour or restyle pieces, and do not add extra layers, logos or accessories. ${extras}
+Layering: ${hasTop ? `the top is ${tuck ? "tucked into" : "worn untucked over"} the bottom; ` : ""}outerwear goes over everything else on the upper body.
+
+POSE AND FRAMING — always identical, so outfits can be compared: standing straight, facing the camera, arms relaxed straight down at the sides and not covering the clothes, feet slightly apart, neutral expression; the whole body from the top of the head to the shoes is visible with a small margin; camera at chest height, no tilt.
+BACKGROUND AND LIGHT: plain light warm-grey seamless studio background, soft even light, soft floor shadow, no props, no text, no watermark.`;
+}
 
 function catalog(items) {
-  return items.map((i) => ({ id: i.id, type: PART_NAMES[i.part], name: i.name, color: i.color, secondaryColor: i.secondaryColor, tags: i.tags }));
+  return items.map((i) => ({ id: i.id, type: PART_NAMES[i.part], name: i.name, brand: i.brand, color: i.color, secondaryColor: i.secondaryColor, tags: i.tags }));
 }
 
 function profileText(p) {
@@ -347,8 +375,13 @@ const TASKS = {
     async run(env, input) {
       const garments = Array.isArray(input.garments) ? input.garments.slice(0, 5).map((g, i) => image(g, `garment ${i + 1}`)) : [];
       if (!garments.length) throw new TaskError(400, "garments are required");
-      const prompt = `${TRYON_PROMPT}${input.tuck ? " Tuck the top into the trousers." : ""}`;
-      return { image: await makeImage(env, prompt, [image(input.person, "person"), ...garments], "2:3") };
+      // Metadata for each garment image (name, category, colour). Older app versions send none.
+      const meta = Array.isArray(input.items) ? input.items : [];
+      const pieces = garments
+        .map((img, i) => ({ img, piece: meta[i] ? item(meta[i]) : { name: "", part: null, color: "", tags: [], unknown: true } }))
+        .sort((a, b) => (LAYER_ORDER[a.piece.part] ?? 9) - (LAYER_ORDER[b.piece.part] ?? 9));
+      const prompt = tryOnPrompt(pieces.map((p) => p.piece), Boolean(input.tuck));
+      return { image: await makeImage(env, prompt, [image(input.person, "person"), ...pieces.map((p) => p.img)], "2:3") };
     },
   },
 

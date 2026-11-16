@@ -42,6 +42,7 @@ function persistEdit(item) {
   const edits = readEdits();
   edits[item.id] = {
     name: item.name || "",
+    brand: item.brand || "",
     part: item.part,
     color: item.color || null,
     secondaryColor: item.secondaryColor || null,
@@ -185,6 +186,7 @@ function GalleryItem({ item, index = 0, selected, onOpen }) {
         />
       </span>
       <span className="gallery-item__name">{item.name || type}</span>
+      {item.brand && <span className="gallery-item__brand">{item.brand}</span>}
     </button>
   );
 }
@@ -307,6 +309,16 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
       </label>
 
       <label className="field">
+        <span>Бренд</span>
+        <input
+          value={draft.brand}
+          maxLength={40}
+          onChange={(event) => setDraft((current) => ({ ...current, brand: event.target.value }))}
+          placeholder="Например: Uniqlo"
+        />
+      </label>
+
+      <label className="field">
         <span>Категория</span>
         <select value={draft.part} onChange={(event) => setDraft((current) => ({ ...current, part: event.target.value }))}>
           {TYPES.slice(1).map((type) => <option value={type.id} key={type.id}>{type.label}</option>)}
@@ -357,7 +369,7 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
   const [sampling, setSampling] = useState(null);
   const [sampleStatus, setSampleStatus] = useState("");
   const [palette, setPalette] = useState(item.palette || []);
-  const [draft, setDraft] = useState({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+  const [draft, setDraft] = useState({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
@@ -371,12 +383,14 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
     const normalizedTags = (tags) => tags.map((tag) => tag.trim()).filter(Boolean);
     return JSON.stringify({
       name: draft.name.trim(),
+      brand: draft.brand.trim(),
       part: draft.part,
       color: draft.color?.toLowerCase() || null,
       secondaryColor: draft.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(draft.tags),
     }) !== JSON.stringify({
       name: (item.name || "").trim(),
+      brand: (item.brand || "").trim(),
       part: item.part,
       color: item.color?.toLowerCase() || null,
       secondaryColor: item.secondaryColor?.toLowerCase() || null,
@@ -425,18 +439,18 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
     setSampling(null);
     setSampleStatus("");
     setPalette(item.palette || []);
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
   }, [item]);
 
   const cancelEditing = () => {
-    setDraft({ name: item.name || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
     setSampling(null);
     setSampleStatus("");
     onClose();
   };
 
   const saveEditing = () => {
-    onSave({ ...item, ...draft, name: draft.name.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean) });
+    onSave({ ...item, ...draft, name: draft.name.trim(), brand: draft.brand.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean) });
     setSampling(null);
     setSampleStatus("Changes saved.");
   };
@@ -650,8 +664,8 @@ export function App() {
     setItems((current) => current.map((item) => item.id === updatedItem.id ? updatedItem : item));
     persistEdit(updatedItem);
     if (updatedItem.id.startsWith("import-")) {
-      const { name, part, color, secondaryColor, tags, palette } = updatedItem;
-      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, part, color, secondaryColor, tags, palette }) }).catch(() => {});
+      const { name, brand, part, color, secondaryColor, tags, palette } = updatedItem;
+      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette }) }).catch(() => {});
     }
     showToast("Сохранено");
   };

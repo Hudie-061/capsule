@@ -66,6 +66,7 @@ function defaultDraft(job) {
     color: metadata.color || "#d8d0c2",
     secondaryColor: metadata.secondaryColor || "",
     tags: Array.isArray(metadata.tags) ? metadata.tags.join(", ") : (metadata.tags || ""),
+    brand: metadata.brand || "",
   };
 }
 
@@ -83,6 +84,7 @@ function ReviewEditor({ job, stage, draft, setDraft, regenPrompt, setRegenPrompt
         {isCrop ? <p className="import-card__detail">Проверь, что вещь в кадре целиком. После подтверждения Gemini сделает чистую картинку без фона.</p> : isGarment ? (
           <>
             <div className="import-field"><label htmlFor={`name-${job.id}`}>Название</label><input id={`name-${job.id}`} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
+            <div className="import-field"><label htmlFor={`brand-${job.id}`}>Бренд <span>необязательно</span></label><input id={`brand-${job.id}`} value={draft.brand || ""} maxLength={40} placeholder="Например: Uniqlo" onChange={(event) => setDraft({ ...draft, brand: event.target.value })} /></div>
             <div className="import-field"><label htmlFor={`part-${job.id}`}>Категория</label><select id={`part-${job.id}`} value={draft.part} onChange={(event) => setDraft({ ...draft, part: event.target.value })}>{PARTS.map(([id, label]) => <option value={id} key={id}>{label}</option>)}</select></div>
             <div className="import-field"><label htmlFor={`primary-${job.id}`}>Основной цвет</label><div className="import-color-row"><input id={`primary-${job.id}`} type="color" value={primaryValid ? draft.color : "#000000"} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /><input aria-label="Основной цвет, hex" aria-invalid={!primaryValid} value={draft.color} onChange={(event) => setDraft({ ...draft, color: event.target.value })} /></div>{!primaryValid && <small className="import-field-error">Нужен цвет в формате #d8d0c2.</small>}</div>
             <div className="import-field"><label htmlFor={`secondary-${job.id}`}>Второй цвет <span>необязательно</span></label><input id={`secondary-${job.id}`} type="text" aria-invalid={!secondaryValid} placeholder="#hex или оставь пустым" value={draft.secondaryColor} onChange={(event) => setDraft({ ...draft, secondaryColor: event.target.value })} />{!secondaryValid && <small className="import-field-error">Нужен цвет в формате #d8d0c2 или пусто.</small>}</div>

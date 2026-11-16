@@ -72,7 +72,8 @@ function hash(text) {
 }
 
 const TRYON = "asset:tryon/";
-const tryOnKey = (itemIds) => `${TRYON}${hash([...itemIds].sort().join("+"))}`;
+// "v2": fitting-room prompt with a fixed pose; photos made with the old prompt are not reused.
+const tryOnKey = (itemIds) => `${TRYON}v2-${hash([...itemIds].sort().join("+"))}`;
 
 export const getTryOn = (itemIds) => blobs.get(tryOnKey(itemIds));
 export const saveTryOn = (itemIds, blob) => blobs.set(tryOnKey(itemIds), blob);

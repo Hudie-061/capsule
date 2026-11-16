@@ -35,6 +35,7 @@ function normalizeMetadata(value = {}) {
     color: typeof m.color === "string" && HEX.test(m.color) ? m.color.toLowerCase() : "#d8d0c2",
     secondaryColor: typeof m.secondaryColor === "string" && HEX.test(m.secondaryColor) ? m.secondaryColor.toLowerCase() : null,
     tags: Array.isArray(m.tags) ? m.tags.filter((t) => typeof t === "string").map((t) => t.trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12) : [],
+    brand: typeof m.brand === "string" ? m.brand.trim().slice(0, 40) : "",
     boundingBox: normalizeBoundingBox(m.boundingBox),
   };
 }
@@ -111,6 +112,7 @@ async function persistImported(job, includeModeled) {
     secondaryColor: m.secondaryColor || null,
     palette: [m.color, m.secondaryColor].filter(Boolean),
     tags: Array.isArray(m.tags) ? m.tags : [],
+    brand: m.brand || existing?.brand || "",
     image: garmentPath,
     thumbnail: garmentPath,
     modeledImage: modeledImage || existing?.modeledImage || null,
@@ -205,7 +207,8 @@ async function route(method, pathname, input) {
   if (patch && method === "PATCH") {
     const record = await getRecord(patch[1]);
     if (!record) throw new HttpError(404, "Вещь не найдена");
-    const allowed = ["name", "part", "color", "secondaryColor", "tags", "palette"];
+    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette"];
+    if (typeof input.brand === "string") input.brand = input.brand.trim().slice(0, 40);
     for (const key of allowed) if (key in input) record[key] = input[key];
     await putRecord(record);
     return resolveRecord(record);

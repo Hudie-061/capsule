@@ -51,7 +51,7 @@ async function toPayload(blob) {
 
 const toBlob = (image) => base64ToBlob(image.data, image.mimeType || "image/png");
 
-const plainItem = (i) => ({ id: i.id, name: i.name, part: i.part, color: i.color, secondaryColor: i.secondaryColor || undefined, tags: i.tags || [] });
+const plainItem = (i) => ({ id: i.id, name: i.name, part: i.part, color: i.color, secondaryColor: i.secondaryColor || undefined, tags: i.tags || [], brand: i.brand || undefined });
 
 export async function analyzeClothing(imageBlob) {
   const { items } = await task("detect", { image: await toPayload(imageBlob) });
@@ -71,8 +71,9 @@ export async function modeledPhoto({ person, garment, direction }) {
   return toBlob(out);
 }
 
-export async function tryOnOutfit({ person, garments, tuck }) {
-  const { image: out } = await task("tryon", { person: await toPayload(person), garments: await Promise.all(garments.map(toPayload)), tuck: Boolean(tuck) });
+// items[i] describes garments[i] (name, category, colour), so the fitting room keeps each piece exact.
+export async function tryOnOutfit({ person, garments, items = [], tuck }) {
+  const { image: out } = await task("tryon", { person: await toPayload(person), garments: await Promise.all(garments.map(toPayload)), items: items.map(plainItem), tuck: Boolean(tuck) });
   return toBlob(out);
 }
 

@@ -131,7 +131,7 @@ export function SettingsView({ focus, onOpen, onToast }) {
 
       <div className="panel">
         <h2 className="panel__title">Фото для примерки</h2>
-        <p className="muted-text">Твоё фото в полный рост: на нём ИИ «надевает» образы. Хранится только на этом устройстве и отправляется в Google лишь при генерации.</p>
+        <p className="muted-text">Твоё фото в полный рост: с него ИИ берёт только лицо и фигуру, а одежду заменяет на образ. Лучше всего: стоя прямо, лицом к камере, руки вдоль тела, хороший свет. Хранится только на этом устройстве и отправляется в Google лишь при генерации.</p>
         <div className="reference-row">
           {reference ? <img className="reference-photo" src={reference} alt="Фото для примерки" /> : <div className="reference-photo reference-photo--empty"><Icon name="camera" size={26} /></div>}
           <div className="reference-actions">
