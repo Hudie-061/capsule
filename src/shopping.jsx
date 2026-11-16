@@ -8,7 +8,7 @@ import { SetupError } from "./lib/gemini.js";
 import { plural } from "./lib/plural.js";
 import { getFeedback, getLearned, getProfile } from "./lib/settings.js";
 import { findGaps } from "./lib/stylist.js";
-import { GarmentIcon, Icon, Spinner } from "./ui.jsx";
+import { GarmentIcon, Icon, Spinner, isDressItem } from "./ui.jsx";
 
 const STORES = [
   { id: "google", name: "Google Покупки", cond: "new", note: "Сравнение цен по магазинам Бельгии", url: (q) => `https://www.google.com/search?tbm=shop&gl=be&hl=ru&q=${encodeURIComponent(q)}` },
@@ -18,10 +18,25 @@ const STORES = [
 const FILTERS = [{ id: "all", label: "Все" }, { id: "new", label: "Новые" }, { id: "used", label: "Б/у" }];
 const PRIORITY = { high: "в первую очередь", medium: "желательно", low: "по желанию" };
 
-function impact(gap) {
-  const n = gap.pairsWith?.length || 0;
+// How many new outfits the piece opens up, counted from the real wardrobe: a top goes with every
+// bottom it pairs with, a bottom with every top, outerwear/shoes/accessories complete existing outfits.
+function newOutfits(gap, items) {
+  const paired = items.filter((i) => gap.pairsWith?.includes(i.id));
+  const of = (part, list) => list.filter((i) => i.part === part && !isDressItem(i)).length;
+  const count = (part) => of(part, paired) || of(part, items);
+  const dresses = items.filter(isDressItem).length;
+  const base = (list) => of("upperbody", list) * of("lowerbody", list) + list.filter(isDressItem).length;
+  if (isDressItem({ part: gap.part, name: gap.item, kind: gap.kind })) return Math.max(1, items.filter((i) => i.part === "shoes").length);
+  if (gap.part === "upperbody") return count("lowerbody");
+  if (gap.part === "lowerbody") return count("upperbody") + of("wholebody_up", paired);
+  const outfits = base(paired) || base(items) || dresses;
+  return Math.min(outfits, 99);
+}
+
+function impact(gap, items) {
+  const n = newOutfits(gap, items);
   if (!n) return PRIORITY[gap.priority] || "";
-  return `+${n} ${plural(n, ["сочетание", "сочетания", "сочетаний"])}`;
+  return `+${n} ${plural(n, ["образ", "образа", "образов"])}`;
 }
 
 export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAccess }) {
@@ -96,9 +111,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         <div className="gap-row" role="group" aria-label="Чего не хватает">
           {gaps.map((g, i) => (
             <button type="button" key={`${g.item}-${i}`} className={`gap-card rise${i === selected ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.05}s` }} aria-pressed={i === selected} onClick={() => setSelected(i)}>
-              <span className="gap-card__icon"><GarmentIcon part={g.part} color={g.color} size={48} outline={false} /></span>
+              <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
               <span className="gap-card__name">{g.item}</span>
-              <span className="gap-card__impact">{g.focus ? "из образа" : impact(g)}</span>
+              <span className="gap-card__impact">{g.focus ? "из образа" : impact(g, items)}</span>
             </button>
           ))}
           {busy && <span className="gap-card gap-card--busy"><Spinner label="Обновляю" /></span>}
@@ -118,7 +133,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           <div className="offer-list" key={`${query}-${filter}`}>
             {stores.map((s, i) => (
               <a key={s.id} className={`offer rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.url(query)} target="_blank" rel="noopener noreferrer">
-                <span className="offer__icon"><GarmentIcon part={gap.part} color={gap.color} size={36} outline={false} /></span>
+                <span className="offer__icon"><GarmentIcon item={gap} size={38} /></span>
                 <span className="offer__text">
                   <span className="offer__title"><span className="strong-text">{s.name}</span><span className="tag tag--small">{s.cond === "new" ? "Новое" : "Б/у"}</span></span>
                   <span className="tiny-text">{s.note}</span>

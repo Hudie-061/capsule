@@ -1,6 +1,7 @@
 // Small shared pieces of the v2 design: icons, garment silhouettes, the sliding toggle
 // and the bottom sheet. Shapes and sizes follow design/V2-*.dc.html.
 import { useEffect, useState } from "react";
+import { kindOf } from "./lib/kinds.js";
 
 const stroke = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round" };
 
@@ -39,24 +40,55 @@ export function Icon({ name, size = 24, width = 1.8, className, color }) {
   );
 }
 
-// ---- garment silhouettes (viewBox 0 0 120 120) --------------------------------------------
+// ---- item silhouettes by exact type (viewBox 0 0 120 120) ---------------------------------
+// fill: the item's colour; line: details drawn on top; ring: items drawn as a thick coloured line.
 const SHAPES = {
-  jacket: "M42 16 L60 24 L78 16 L102 30 L108 104 L86 104 L84 58 L80 104 L40 104 L36 58 L34 104 L12 104 L18 30 Z",
-  tee: "M40 18 L52 14 Q60 24 68 14 L80 18 L106 38 L94 54 L84 47 L84 106 L36 106 L36 47 L26 54 L14 38 Z",
-  pants: "M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z",
-  shoes: "M12 76 L16 52 Q30 58 42 48 L58 58 Q82 66 102 70 Q110 72 110 82 L110 88 L12 88 Z",
-  dress: "M44 12 L60 20 L76 12 L84 38 L76 52 L100 108 L20 108 L44 52 L36 38 Z",
-  bag: "M22 46 L98 46 L104 106 L16 106 Z M42 46 Q42 20 60 20 Q78 20 78 46 L70 46 Q70 28 60 28 Q50 28 50 46 Z",
+  "t-shirt": { fill: "M40 18 L52 14 Q60 24 68 14 L80 18 L106 38 L94 54 L84 47 L84 106 L36 106 L36 47 L26 54 L14 38 Z" },
+  shirt: { fill: "M42 16 L52 12 L60 22 L68 12 L78 16 L104 34 L110 74 L96 76 L90 50 L88 108 L32 108 L30 50 L24 76 L10 74 L16 34 Z", line: "M52 12 L56 26 L60 22 L64 26 L68 12 M60 24 L60 106 M60 46 h0.1 M60 66 h0.1 M60 86 h0.1" },
+  hoodie: { fill: "M40 30 Q38 12 60 12 Q82 12 80 30 L104 42 L110 98 L96 100 L90 58 L90 108 L30 108 L30 58 L24 100 L10 98 L16 42 Z", line: "M44 30 Q60 46 76 30 M54 40 L54 54 M66 40 L66 54 M42 84 L78 84 L82 102 L38 102 Z" },
+  sweater: { fill: "M40 18 Q60 30 80 18 L104 34 L110 98 L96 100 L90 54 L88 108 L32 108 L30 54 L24 100 L10 98 L16 34 Z", line: "M42 20 Q60 32 78 20 M32 100 L88 100" },
+  jacket: { fill: "M42 16 L60 24 L78 16 L102 30 L108 104 L86 104 L84 58 L80 104 L40 104 L36 58 L34 104 L12 104 L18 30 Z", line: "M60 24 L60 104 M44 84 L52 84 M68 84 L76 84" },
+  blazer: { fill: "M42 14 L60 22 L78 14 L102 28 L108 106 L86 106 L84 58 L80 106 L40 106 L36 58 L34 106 L12 106 L18 28 Z", line: "M46 16 L60 62 L74 16 M60 62 L60 106 M60 72 h0.1 M60 88 h0.1 M42 80 L52 80" },
+  coat: { fill: "M42 8 L60 16 L78 8 L100 20 L106 114 L84 114 L82 54 L80 116 L40 116 L38 54 L36 114 L14 114 L20 20 Z", line: "M46 10 L60 52 L74 10 M60 52 L60 116 M66 64 h0.1 M66 82 h0.1 M66 100 h0.1" },
+  dress: { fill: "M44 12 L60 20 L76 12 L84 38 L76 52 L100 108 L20 108 L44 52 L36 38 Z", line: "M38 52 L82 52" },
+  trousers: { fill: "M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z", line: "M38 18 L82 18" },
+  jeans: { fill: "M38 10 L82 10 L90 110 L66 110 L60 46 L54 110 L30 110 Z", line: "M38 18 L82 18 M42 18 Q44 30 54 28 M78 18 Q76 30 66 28 M60 18 L60 40" },
+  shorts: { fill: "M34 22 L86 22 L94 76 L66 78 L60 50 L54 78 L26 76 Z", line: "M34 30 L86 30" },
+  skirt: { fill: "M40 20 L80 20 L98 102 L22 102 Z", line: "M40 28 L80 28 M52 28 L46 102 M68 28 L74 102" },
+  sneakers: { fill: "M12 76 L16 52 Q30 58 42 48 L58 58 Q82 66 102 70 Q110 72 110 82 L110 88 L12 88 Z", line: "M12 80 L110 80 M46 56 L52 62 M52 54 L58 60" },
+  boots: { fill: "M32 12 L62 12 L64 66 Q92 70 104 80 Q110 84 110 94 L110 104 L30 104 Z", line: "M30 96 L110 96 M32 22 L62 22" },
+  loafers: { fill: "M12 84 L18 66 Q40 72 60 64 Q86 66 104 76 Q110 80 110 88 L110 94 L12 94 Z", line: "M12 88 L110 88 M48 70 Q58 76 68 68" },
+  bag: { fill: "M22 46 L98 46 L104 106 L16 106 Z M42 46 Q42 20 60 20 Q78 20 78 46 L70 46 Q70 28 60 28 Q50 28 50 46 Z", line: "M22 62 L98 62" },
+  backpack: { fill: "M32 32 Q32 14 60 14 Q88 14 88 32 L92 108 L28 108 Z", line: "M42 70 L78 70 L78 98 L42 98 Z M50 14 Q50 6 60 6 Q70 6 70 14" },
+  cap: { fill: "M22 76 Q22 36 60 36 Q98 36 98 76 Z M60 76 L114 76 Q114 88 96 88 L60 88 Z", line: "M60 36 L60 76" },
+  beanie: { fill: "M26 84 Q26 28 60 28 Q94 28 94 84 Z", line: "M24 70 L96 70 M24 86 L96 86 M24 70 L24 86 M96 70 L96 86" },
+  hat: { fill: "M38 66 Q38 30 60 30 Q82 30 82 66 Z M10 68 Q60 52 110 68 Q60 84 10 68 Z", line: "M38 58 Q60 64 82 58" },
+  scarf: { fill: "M28 22 Q60 40 92 22 L96 40 Q60 60 24 40 Z M60 44 L78 48 L74 110 L58 110 Z", line: "M58 100 L74 100" },
+  tie: { fill: "M54 12 L66 12 L70 24 L64 30 L74 96 L60 112 L46 96 L56 30 L50 24 Z" },
+  belt: { fill: "M6 50 L114 50 L114 70 L6 70 Z", line: "M70 46 L90 46 L90 74 L70 74 Z M78 60 L96 60" },
+  chain: { ring: "M28 20 Q60 100 92 20", line: "M60 74 m-7 0 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0" },
+  watch: { fill: "M48 6 L72 6 L72 114 L48 114 Z", line: "M60 60 m-22 0 a22 22 0 1 0 44 0 a22 22 0 1 0 -44 0 M60 46 L60 60 L70 66" },
+  glasses: { ring: "M16 60 a20 20 0 1 0 40 0 a20 20 0 1 0 -40 0 M64 60 a20 20 0 1 0 40 0 a20 20 0 1 0 -40 0 M56 56 Q60 50 64 56" },
+  sunglasses: { fill: "M14 50 L56 50 Q56 78 36 78 Q14 78 14 50 Z M64 50 L106 50 Q106 78 86 78 Q64 78 64 50 Z", line: "M56 52 Q60 46 64 52 M8 50 L112 50" },
+  bracelet: { ring: "M60 60 m-34 0 a34 22 0 1 0 68 0 a34 22 0 1 0 -68 0" },
+  ring: { ring: "M60 66 m-26 0 a26 26 0 1 0 52 0 a26 26 0 1 0 -52 0", line: "M60 30 m-9 0 a9 9 0 1 0 18 0 a9 9 0 1 0 -18 0" },
+  earrings: { ring: "M38 26 L38 44 M82 26 L82 44", line: "M38 64 m-12 0 a12 16 0 1 0 24 0 a12 16 0 1 0 -24 0 M82 64 m-12 0 a12 16 0 1 0 24 0 a12 16 0 1 0 -24 0" },
 };
 
-const PART_SHAPE = { wholebody_up: "jacket", upperbody: "tee", lowerbody: "pants", shoes: "shoes", accessories_up: "bag" };
-export const isDressItem = (item) => item?.part === "wholebody_up" && /dress|jumpsuit|платье|сарафан|комбинезон/i.test(`${item.name || ""} ${(item.tags || []).join(" ")}`);
+export const isDressItem = (item) => item?.part === "wholebody_up" && /dress|jumpsuit|платье|сарафан|комбинезон/i.test(`${item.kind || ""} ${item.name || ""} ${(item.tags || []).join(" ")}`);
 
-export function GarmentIcon({ part, color = "#8a7f72", size = 48, dress = false, outline = true }) {
-  const shape = dress ? "dress" : PART_SHAPE[part] || "tee";
+// item: anything with part / kind / name (wardrobe item, shopping gap). `part` alone still works.
+export function GarmentIcon({ item, part, color, size = 48, dress = false, outline = true }) {
+  const kind = dress ? "dress" : kindOf(item || { part });
+  const shape = SHAPES[kind] || SHAPES["t-shirt"];
+  const fill = color || item?.color || "#8a7f72";
+  const edge = outline ? "#1E1B18" : "none";
   return (
     <svg aria-hidden="true" width={size} height={size} viewBox="0 0 120 120">
-      <path d={SHAPES[shape]} fill={color} fillRule="evenodd" stroke={outline ? "#1E1B18" : "none"} strokeOpacity={shape === "shoes" ? 0.3 : 0.25} strokeWidth="2" style={{ transition: "fill .4s" }} />
+      {shape.fill && <path d={shape.fill} fill={fill} fillRule="evenodd" stroke={edge} strokeOpacity="0.28" strokeWidth="2" strokeLinejoin="round" style={{ transition: "fill .4s" }} />}
+      {shape.ring && <path d={shape.ring} fill="none" stroke={fill} strokeWidth="8" strokeLinecap="round" style={{ transition: "stroke .4s" }} />}
+      {shape.ring && outline && <path d={shape.ring} fill="none" stroke="#1E1B18" strokeOpacity="0.25" strokeWidth="1.5" />}
+      {shape.line && <path d={shape.line} fill="none" stroke="#1E1B18" strokeOpacity="0.35" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />}
     </svg>
   );
 }

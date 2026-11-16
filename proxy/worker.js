@@ -121,7 +121,7 @@ function kind(value) {
   return text(value, 24).toLowerCase().replace(/[^a-z -]/g, "").trim();
 }
 
-const PROFILE_KEYS = ["height", "weight", "build", "goal", "styles", "fits", "palette", "avoid", "notes"];
+const PROFILE_KEYS = ["gender", "height", "weight", "build", "goal", "styles", "fits", "palette", "avoid", "notes"];
 function profile(value) {
   const v = value && typeof value === "object" ? value : {};
   return Object.fromEntries(PROFILE_KEYS.map((k) => [k, text(v[k], 160)]));
@@ -272,7 +272,7 @@ function catalog(items) {
 }
 
 function profileText(p) {
-  const labels = { height: "Height", weight: "Weight", build: "Build", goal: "Goal for outfits", styles: "Preferred styles", fits: "Preferred fits", palette: "Palette that suits them", avoid: "Never suggest", notes: "Other notes" };
+  const labels = { gender: "Gender", height: "Height", weight: "Weight", build: "Build", goal: "Goal for outfits", styles: "Preferred styles", fits: "Preferred fits", palette: "Palette that suits them", avoid: "Never suggest", notes: "Other notes" };
   const lines = PROFILE_KEYS.filter((k) => p[k]).map((k) => `- ${labels[k]}: ${p[k]}`);
   return lines.length ? quote(lines.join("\n")) : "- (no profile yet)";
 }
@@ -301,9 +301,9 @@ const GAPS_SCHEMA = {
         type: "OBJECT",
         properties: {
           item: { type: "STRING" }, why: { type: "STRING" }, pairsWith: { type: "ARRAY", items: { type: "STRING" } }, priority: { type: "STRING", enum: ["high", "medium", "low"] },
-          part: { type: "STRING", enum: PARTS }, color: { type: "STRING" }, query: { type: "STRING" },
+          part: { type: "STRING", enum: PARTS }, kind: { type: "STRING" }, color: { type: "STRING" }, query: { type: "STRING" },
         },
-        required: ["item", "why", "pairsWith", "priority", "part", "color", "query"],
+        required: ["item", "why", "pairsWith", "priority", "part", "kind", "color", "query"],
       },
     },
   },
@@ -452,7 +452,7 @@ ${JSON.stringify(catalog(items))}
 PAST RATINGS
 ${feedbackText(fb, items)}
 
-For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence, "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
+For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence, "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "kind" = its exact type as one short lowercase English noun (e.g. "blazer", "shirt", "hoodie", "jeans", "boots", "bag", "chain"), "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" from the profile gender, or only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
       const result = await askJson(env, prompt, GAPS_SCHEMA, { temperature: 0.5 });
       const ids = new Set(items.map((i) => i.id));
       return {
@@ -461,6 +461,7 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
           item: text(g.item, 120), why: text(g.why, 220), priority: ["high", "medium", "low"].includes(g.priority) ? g.priority : "medium",
           pairsWith: [...new Set((Array.isArray(g.pairsWith) ? g.pairsWith : []).filter((id) => ids.has(id)))],
           part: PARTS.includes(g.part) ? g.part : "upperbody",
+          kind: kind(g.kind),
           color: HEX.test(g.color || "") ? g.color : "#8a7f72",
           query: text(g.query, 100).replace(/[^\p{L}\p{N} '-]/gu, " ").replace(/\s+/g, " ").trim(),
         })),

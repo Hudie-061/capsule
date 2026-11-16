@@ -5,6 +5,7 @@ import { OptimizedImage } from "./OptimizedImage.jsx";
 import { localFetch } from "./lib/local-api.js";
 import { plural } from "./lib/plural.js";
 import { getSettings } from "./lib/settings.js";
+import { Onboarding, isOnboardingDone } from "./onboarding.jsx";
 import { PaletteView } from "./palette.jsx";
 import { SettingsView } from "./settings-panel.jsx";
 import { ShoppingView } from "./shopping.jsx";
@@ -597,6 +598,7 @@ export function App() {
   const [profileFocus, setProfileFocus] = useState(null);
   const [setupReady, setSetupReady] = useState(true);
   const [toast, setToast] = useState("");
+  const [onboarding, setOnboarding] = useState(null); // { needsAccess } while the first-launch flow is shown
   const importRef = useRef(null);
   const toastTimer = useRef(null);
 
@@ -614,6 +616,12 @@ export function App() {
       })
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    Promise.all([isOnboardingDone(), getSettings()]).then(([done, s]) => {
+      if (!done) setOnboarding({ needsAccess: !(s.proxyUrl && s.accessCode) });
+    });
   }, []);
 
   useEffect(() => {
@@ -708,7 +716,7 @@ export function App() {
       <main className="app-main" key={`${tab}:${sub || ""}`}>
         {tab === "today" && <TodayView items={items} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast} />}
         {tab === "shopping" && <ShoppingView items={items} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} />}
-        {tab === "profile" && !sub && <SettingsView focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} />}
+        {tab === "profile" && !sub && <SettingsView items={items} focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} onRestartOnboarding={() => setOnboarding({ needsAccess: !setupReady })} />}
         {tab === "profile" && sub === "palette" && <PaletteView setupReady={setupReady} onOpenAccess={openAccess} onBack={() => setSub(null)} onFindClothes={() => go("shopping", { refresh: true })} />}
         {tab === "profile" && sub === "timing" && <TimingView onBack={() => setSub(null)} onToast={showToast} />}
         {tab === "wardrobe" && (
@@ -750,6 +758,7 @@ export function App() {
       <BottomNav tab={tab} onTab={(next) => go(next)} onAdd={addItems} />
       {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
       <WardrobeImportFlow ref={importRef} onGarmentApproved={addImportedItem} onOpenAccess={openAccess} onOpenItem={openItem} />
+      {onboarding && <Onboarding needsAccess={onboarding.needsAccess} onDone={() => { setOnboarding(null); go("today"); }} onAddItems={addItems} />}
       {toast && <p className="toast" role="status">{toast}</p>}
     </div>
   );

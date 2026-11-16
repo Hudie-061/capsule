@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { clearTryOns, getPalette, getTiming } from "./lib/daily.js";
 import { checkConnection } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
-import { clearFeedback, EMPTY_PROFILE, getLearned, getModelReference, getProfile, getSettings, saveLearned, saveProfile, saveSettings, setModelReference } from "./lib/settings.js";
+import { clearFeedback, EMPTY_PROFILE, getFeedback, getLearned, getModelReference, getProfile, getSettings, saveLearned, saveProfile, saveSettings, setModelReference } from "./lib/settings.js";
 import { Icon } from "./ui.jsx";
 
 const PROFILE_FIELDS = [
@@ -19,8 +19,42 @@ const PROFILE_FIELDS = [
   ["notes", "Что ещё учесть", "хожу на учёбу и в зал"],
 ];
 const TIMING_LABEL = { morning: "Утром, на сегодня", evening: "С вечера, на завтра", both: "Оба раза" };
+const GENDERS = [["male", "Мужчина"], ["female", "Женщина"], ["", "Не указывать"]];
 
-export function SettingsView({ focus, onOpen, onToast }) {
+const top = (counts, n) => [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
+const tally = (values) => values.reduce((map, v) => map.set(v, (map.get(v) || 0) + 1), new Map());
+
+// «Что я о тебе знаю»: what the stylist has learned, counted on the device from ratings and rules.
+// Shown back to the user so every tap visibly makes the app more theirs.
+function KnowledgeCard({ items, feedback, learned, onShowRules }) {
+  const liked = feedback.filter((f) => f.liked);
+  const disliked = feedback.filter((f) => !f.liked);
+  const names = new Map(items.map((i) => [i.id, i.name]));
+  const loves = [
+    ...top(tally(liked.flatMap((f) => f.reasons || []).filter((r) => !r.startsWith("Не нравится"))), 2).map((r) => r.toLowerCase()),
+    ...top(tally(liked.flatMap((f) => f.itemIds || []).filter((id) => names.has(id))), 2).map((id) => names.get(id)),
+  ];
+  const avoids = top(tally(disliked.flatMap((f) => f.reasons || []).map((r) => (r.startsWith("Не нравится: ") ? r.slice(13) : r.toLowerCase()))), 3);
+  const left = Math.max(0, 10 - feedback.length);
+  return (
+    <div className="knowledge rise">
+      <span className="knowledge__label">Что я о тебе знаю</span>
+      <div className="knowledge__stats">
+        <span><b>{items.length}</b>вещей</span>
+        <span><b>{feedback.length}</b>оценок</span>
+        <span><b>{liked.length}</b>понравилось</span>
+        <span><b>{learned.length}</b>правил</span>
+      </div>
+      {loves.length > 0 && <p><span className="knowledge__key">Любишь</span>{loves.join(", ")}</p>}
+      {avoids.length > 0 && <p><span className="knowledge__key">Не предлагаю</span>{avoids.join(", ")}</p>}
+      {!loves.length && !avoids.length && <p className="knowledge__muted">Пока знаю только твой гардероб. Оценивай образы в «Сегодня» — каждый тап меняет следующий подбор.</p>}
+      {left > 0 && (loves.length > 0 || avoids.length > 0) && <p className="knowledge__muted">Ещё {left} {left === 1 ? "оценка" : left < 5 ? "оценки" : "оценок"} — и подбор станет заметно точнее.</p>}
+      {learned.length > 0 && <button type="button" className="text-button text-button--dark" onClick={onShowRules}>Правила стилиста ({learned.length})</button>}
+    </div>
+  );
+}
+
+export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnboarding }) {
   const [settings, setSettings] = useState(null);
   const [profile, setProfile] = useState(EMPTY_PROFILE);
   const [reference, setReference] = useState(null);
@@ -29,8 +63,10 @@ export function SettingsView({ focus, onOpen, onToast }) {
   const [checking, setChecking] = useState({ tone: "", text: "" });
   const [palette, setPalette] = useState(null);
   const [timing, setTiming] = useState(null);
+  const [feedback, setFeedback] = useState([]);
   const fileRef = useRef(null);
   const accessRef = useRef(null);
+  const rulesRef = useRef(null);
 
   useEffect(() => {
     getSettings().then(setSettings);
@@ -38,6 +74,7 @@ export function SettingsView({ focus, onOpen, onToast }) {
     getLearned().then(setLearned);
     getPalette().then(setPalette);
     getTiming().then(setTiming);
+    getFeedback().then(setFeedback);
     getModelReference().then((blob) => setReference(blob ? URL.createObjectURL(blob) : null));
   }, []);
 
@@ -79,6 +116,8 @@ export function SettingsView({ focus, onOpen, onToast }) {
     <section className="screen profile">
       <h1 className="screen-title rise">Профиль</h1>
 
+      <KnowledgeCard items={items} feedback={feedback} learned={learned} onShowRules={() => rulesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} />
+
       <button type="button" className="palette-teaser rise" onClick={() => onOpen("palette")}>
         <span className="palette-teaser__text">
           <span className="palette-teaser__label">Моя палитра</span>
@@ -99,6 +138,12 @@ export function SettingsView({ focus, onOpen, onToast }) {
       <div className="panel rise" style={{ animationDelay: ".08s" }}>
         <h2 className="panel__title">Мой стиль</h2>
         <p className="muted-text">Стилист учитывает это при каждом подборе. Можно писать как угодно, своими словами.</p>
+        <div className="field-v2">
+          <span>Кто ты</span>
+          <div className="choice-row" role="radiogroup" aria-label="Пол">
+            {GENDERS.map(([id, label]) => <button type="button" role="radio" key={id || "none"} aria-checked={(profile.gender || "") === id} className={`filter-pill${(profile.gender || "") === id ? " is-on" : ""}`} onClick={() => setProfile({ ...profile, gender: id })}>{label}</button>)}
+          </div>
+        </div>
         <div className="form-grid">
           {PROFILE_FIELDS.map(([key, label, placeholder]) => (
             <label className="field-v2" key={key}>
@@ -113,8 +158,8 @@ export function SettingsView({ focus, onOpen, onToast }) {
         </div>
       </div>
 
-      <div className="panel">
-        <h2 className="panel__title">Что запомнил стилист</h2>
+      <div className="panel" ref={rulesRef}>
+        <h2 className="panel__title">Правила стилиста</h2>
         <p className="muted-text">Правила из твоих комментариев к образам. Они важнее профиля. Можно удалить лишнее или дописать своё.</p>
         {learned.length ? (
           <ul className="rule-list">
@@ -156,6 +201,8 @@ export function SettingsView({ focus, onOpen, onToast }) {
         {checking.text && <p className={`status-line${checking.tone ? ` status-line--${checking.tone}` : ""}`} role="status">{checking.text}</p>}
         <p className="tiny-text">Адрес этого приложения: {window.location.origin}</p>
       </div>
+
+      {onRestartOnboarding && <button type="button" className="text-button center-text restart-link" onClick={onRestartOnboarding}>Пройти знакомство заново</button>}
     </section>
   );
 }

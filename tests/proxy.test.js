@@ -46,7 +46,7 @@ beforeEach(() => {
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true }] });
     if (prompt.includes("recommend at most 6")) {
       return reply({ summary: "s", items: [
-        { item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a", "a", "ghost"], part: "lowerbody", color: "#2b3a55", query: "dark straight jeans?!" },
+        { item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a", "a", "ghost"], part: "lowerbody", kind: "Jeans", color: "#2b3a55", query: "dark straight jeans?!" },
         { item: "Что-то", why: "ok", priority: "low", pairsWith: [], part: "spaceship", color: "red", query: "x" },
       ] });
     }
@@ -208,7 +208,7 @@ describe("no general-purpose access", () => {
     const res = await worker.fetch(call("/api/gaps", { wardrobe }), env());
     const out = await res.json();
     expect(upstream[0].prompt).toContain("colour + garment type");
-    expect(out.items[0]).toEqual({ item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a"], part: "lowerbody", color: "#2b3a55", query: "dark straight jeans" });
+    expect(out.items[0]).toEqual({ item: "Тёмные джинсы", why: "ok", priority: "high", pairsWith: ["a"], part: "lowerbody", kind: "jeans", color: "#2b3a55", query: "dark straight jeans" });
     expect(out.items[1].part).toBe("upperbody"); // unknown part falls back
     expect(out.items[1].color).toBe("#8a7f72");
   });

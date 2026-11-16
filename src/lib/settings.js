@@ -57,6 +57,7 @@ export const MODEL_REFERENCE_PATH = MODEL_REFERENCE_KEY;
 
 // ---- style profile + outfit feedback --------------------------------------
 export const EMPTY_PROFILE = {
+  gender: "",
   height: "",
   weight: "",
   build: "",

@@ -5,12 +5,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { clearTryOns, defaultMode, formatDay, getDayPlan, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
 import { SetupError, tryOnOutfit } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
-import { renderOutfit } from "./lib/mannequin.js";
+import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
 import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, saveLearned, setModelReference } from "./lib/settings.js";
 import { learnFromComment, planOutfits } from "./lib/stylist.js";
 import { GarmentIcon, Icon, Segmented, Sheet, isDressItem } from "./ui.jsx";
 
 const LIKE_REASONS = ["Общий вайб", "Сочетание цветов", "Подчёркивает фигуру", "Удобно на каждый день"];
+// What the stylist takes from each tap, said back to the user right away.
+const LIKE_LEARNED = {
+  "Общий вайб": "больше образов в таком настроении",
+  "Сочетание цветов": "чаще такие сочетания цветов",
+  "Подчёркивает фигуру": "чаще силуэты, которые подчёркивают фигуру",
+  "Удобно на каждый день": "больше удобных образов на каждый день",
+};
+const dislikeLearned = (reason) => (reason.startsWith("Не нравится: ") ? `реже предлагать «${reason.slice(13)}»` : `учту «${reason.toLowerCase()}» в следующих образах`);
 const DISLIKE_REASONS = ["Не мой стиль", "Цвета не сочетаются", "Слишком просто", "Не по погоде", "Слишком мешковато", "Скрывает фигуру"];
 const OCCASION_CHIPS = ["Учёба", "Работа", "Спорт", "Свидание", "Дождь", "Холодно", "Тепло"];
 const PART_ORDER = { wholebody_up: 0, upperbody: 1, lowerbody: 2, shoes: 3, accessories_up: 4 };
@@ -34,30 +42,24 @@ function cleanPlan(plan, byId) {
 // ---- mannequin with callouts --------------------------------------------------------------
 // Coordinates of the 600×1000 canvas from lib/mannequin.js, drawn inside a 320×300 box.
 const BOX = { w: 320, h: 300, fx: 76, fy: 10, scale: 0.28, label: 99 }; // label = 31% of the box, as in v2.css
-const ANCHORS = { outer: [165, 300, "left"], top: [345, 250, "right"], dress: [335, 430, "right"], bottom: [335, 650, "right"], shoes: [245, 915, "left"], accessory: [520, 320, "right"] };
-
-function callouts(pieces) {
-  const seen = new Set();
-  const list = [];
-  for (const piece of pieces) {
-    const slot = isDressItem(piece) ? "dress" : { wholebody_up: "outer", upperbody: "top", lowerbody: "bottom", shoes: "shoes", accessories_up: "accessory" }[piece.part];
-    if (!slot || seen.has(slot)) continue; // the canvas draws only the first piece of each kind
-    seen.add(slot);
-    const [ax, ay, side] = ANCHORS[slot];
-    list.push({ piece, side, x: BOX.fx + ax * BOX.scale, y: BOX.fy + ay * BOX.scale });
-  }
+// Callout labels sit at the sides; each line points at the item's own place on the figure.
+function callouts(pieces, body) {
+  const byId = new Map(pieces.map((p) => [p.id, p]));
+  const list = outfitAnchors(pieces, body)
+    .map((a) => ({ piece: byId.get(a.id), side: a.side, x: BOX.fx + a.x * BOX.scale, y: BOX.fy + a.y * BOX.scale }))
+    .filter((c) => c.piece);
   for (const side of ["left", "right"]) {
     let last = -Infinity;
     list.filter((c) => c.side === side).sort((a, b) => a.y - b.y).forEach((c) => {
-      c.ly = Math.min(BOX.h - 20, Math.max(20, c.y, last + 40));
+      c.ly = Math.min(BOX.h - 20, Math.max(20, c.y, last + 38));
       last = c.ly;
     });
   }
   return list;
 }
 
-function Mannequin({ board, pieces, open, onToggle, onPick }) {
-  const marks = useMemo(() => callouts(pieces), [pieces]);
+function Mannequin({ board, pieces, body, open, onToggle, onPick }) {
+  const marks = useMemo(() => callouts(pieces, body), [pieces, body]);
   const pct = (value, total) => `${(value / total) * 100}%`;
   return (
     <div className="mannequin">
@@ -113,8 +115,10 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const [likeAt, setLikeAt] = useState(null);
   const [likeReasons, setLikeReasons] = useState(new Set());
   const [zoom, setZoom] = useState(null);
+  const [lastLiked, setLastLiked] = useState("");
   const photoRef = useRef(null);
   const ticketRef = useRef(0); // ignores a slow plan request after the day was switched
+  const [figure, setFigure] = useState({}); // gender, height, weight from the profile shape the mannequin
 
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const itemsRef = useRef(items);
@@ -129,6 +133,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const piecesKey = pieces.map((p) => p.id).join("+");
 
   useEffect(() => { getTiming().then((t) => setMode(defaultMode(t))); }, []);
+  useEffect(() => { getProfile().then((p) => setFigure({ gender: p.gender, height: p.height, weight: p.weight })); }, []);
   useEffect(() => {
     getModelReference().then((blob) => setHasReference(Boolean(blob)));
     const onSettings = () => getModelReference().then((blob) => setHasReference(Boolean(blob)));
@@ -183,10 +188,10 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   useEffect(() => {
     if (!flipped || !pieces.length) return undefined;
     let alive = true;
-    renderOutfit(pieces, { tuck: outfit?.tuck }).then((url) => alive && setBoard(url)).catch(() => alive && setBoard(null));
+    renderOutfit(pieces, { tuck: outfit?.tuck, ...figure }).then((url) => alive && setBoard(url)).catch(() => alive && setBoard(null));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, piecesKey, outfit?.tuck]);
+  }, [flipped, piecesKey, outfit?.tuck, figure]);
 
   // Cached try-on for this exact set of pieces.
   useEffect(() => {
@@ -220,6 +225,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     setComment("");
     if (outfit && (reason || words)) {
       await addFeedback({ title: outfit.title, itemIds: outfit.itemIds, tuck: outfit.tuck, liked: false, reasons: reason ? [reason] : [], comment: words });
+      if (reason) onToast?.(`Запомнил: ${dislikeLearned(reason)}`);
       if (words) {
         learnFromComment({ comment: words, outfitItems: pieces, liked: false, learned: await getLearned() })
           .then(async (learned) => { await saveLearned(learned.rules); if (learned.remembered) onToast?.(`Запомнил: ${learned.remembered}`); })
@@ -235,12 +241,12 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     setLikeAt(list[list.length - 1]?.at || null);
     setLikeReasons(new Set());
     await store({ ...plan, chosen: { at: new Date().toISOString() } });
-    onToast?.(evening ? "Отлично, образ на завтра готов" : "Отлично, хорошего дня");
+    onToast?.(evening ? "Образ на завтра готов. Похожие буду предлагать чаще" : "Хорошего дня! Похожие образы буду предлагать чаще");
   };
 
   const toggleLikeReason = async (reason) => {
     const next = new Set(likeReasons);
-    if (next.has(reason)) next.delete(reason); else next.add(reason);
+    if (next.has(reason)) next.delete(reason); else { next.add(reason); setLastLiked(reason); }
     setLikeReasons(next);
     if (likeAt) await amendFeedback(likeAt, { reasons: [...next] });
   };
@@ -368,7 +374,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             <div className="look-tiles" data-count={pieces.length}>
               {pieces.map((p, i) => (
                 <button type="button" key={p.id} className="look-tile rise" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => setSwapId(p.id)} aria-label={`Заменить: ${p.name}`}>
-                  {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon part={p.part} color={p.color} size={92} dress={isDressItem(p)} />}
+                  {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
                   <span className="look-tile__name">{p.name}</span>
                   <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>
                 </button>
@@ -385,7 +391,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             <div className="stage">
               {!me && (
                 <>
-                  <Mannequin board={board} pieces={pieces} open={calloutsOpen} onToggle={() => setCalloutsOpen((v) => !v)} onPick={setSwapId} />
+                  <Mannequin board={board} pieces={pieces} body={{ ...figure, tuck: outfit.tuck }} open={calloutsOpen} onToggle={() => setCalloutsOpen((v) => !v)} onPick={setSwapId} />
                   <span className="stage__caption">{calloutsOpen ? "Нажми на вещь, чтобы заменить" : "Нажми на манекен — покажу вещи"}</span>
                 </>
               )}
@@ -440,7 +446,12 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           {plan.chosen && likeAt ? (
             <div className="like-reasons rise">
               <span className="muted-text">Что зацепило? <span className="tiny-text">необязательно</span></span>
-              <div className="chip-row">{LIKE_REASONS.map((r) => <button type="button" key={r} className={`chip${likeReasons.has(r) ? " is-on" : ""}`} onClick={() => toggleLikeReason(r)}>{r}</button>)}</div>
+              <div className="chip-row">{LIKE_REASONS.map((r) => <button type="button" key={r} className={`chip${likeReasons.has(r) ? " is-on" : ""}`} aria-pressed={likeReasons.has(r)} onClick={() => toggleLikeReason(r)}>{likeReasons.has(r) && <Icon name="check" size={14} width={2.6} />}{r}</button>)}</div>
+              {likeReasons.has(lastLiked) && (
+                <p className="learned-line fade" key={lastLiked} role="status">
+                  <Icon name="check" size={14} width={2.6} /> Запомнил: {LIKE_LEARNED[lastLiked]}. Это учтётся уже в следующем образе.
+                </p>
+              )}
             </div>
           ) : <p className="hint-text">Нажми на вещь, чтобы заменить её</p>}
         </>
@@ -460,7 +471,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             return (
               <button type="button" key={alt.id} className={`alt-card rise${current ? " is-current" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={current} onClick={() => swapTo(alt.id)}>
                 <span className="alt-card__image">
-                  {alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon part={alt.part} color={alt.color} size={72} />}
+                  {alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}
                   {current && <span className="badge-dark">Сейчас</span>}
                 </span>
                 <span className="alt-card__text">
