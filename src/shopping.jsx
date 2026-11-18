@@ -11,7 +11,7 @@
 // 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
 //    profile's height and weight) is added to the search; the chip turns it off.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { chainLinks, chainOffers, offerFallback, queryGender, searchChains } from "./lib/chains.js";
+import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
@@ -158,10 +158,13 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
   const list = useMemo(() => {
     const all = offers.data?.offers || [];
-    return filter === "chains" ? chainOffers(all) : all.filter((o) => o.condition === filter).slice(0, 12);
+    if (filter === "chains") return chainOffers(all);
+    const same = all.filter((o) => o.condition === filter).slice(0, 12);
+    return filter === "new" ? shopOrder(same) : same; // second-hand stays cheapest first
   }, [offers.data, filter]);
   const maxTotal = list.length ? Math.max(...list.map((o) => o.total)) : 0;
-  const best = list[0];
+  // The cheapest offer gets «Лучшая цена», wherever Zalando-first ordering puts it.
+  const best = list.reduce((a, b) => (!a || b.total < a.total ? b : a), null);
   const bestSaving = best ? Math.round(maxTotal - best.total) : 0;
 
   const thisMonth = new Date().toISOString().slice(0, 7);
@@ -314,7 +317,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                   const id = idOf(o);
                   const off = discount(o);
                   return (
-                    <div key={id} className={`offer rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.05}s` }}>
+                    <div key={id} className={`offer rise${o === best ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.05}s` }}>
                       <a className="offer__main" href={direct[id] || offerFallback(o, linkCountry, gender)} target="_blank" rel="noopener noreferrer" onClick={(e) => openOffer(e, o)} aria-busy={opening === id}>
                         <span className="offer__icon">{o.image ? <img src={o.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <GarmentIcon item={gap} size={38} />}</span>
                         <span className="offer__text">
@@ -331,7 +334,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                         <span className="offer__price">
                           {opening === id ? <Spinner label="Открываю" /> : <span className="offer__total">{money(o.total, currency)}</span>}
                           {off > 0 && opening !== id && <span className="offer__old">{money(o.oldPrice, currency)}</span>}
-                          {i === 0 && bestSaving > 0 && <span className="badge-best">Лучшая · −{money(bestSaving, currency)}</span>}
+                          {o === best && bestSaving > 0 && <span className="badge-best">Лучшая · −{money(bestSaving, currency)}</span>}
                         </span>
                       </a>
                       <button type="button" className={`offer__bought${bought === id ? " is-on" : ""}`} onClick={() => markBought(o)} disabled={bought === id}>

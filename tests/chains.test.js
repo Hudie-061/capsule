@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopQuery } from "../src/lib/chains.js";
+import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQuery } from "../src/lib/chains.js";
 
 const offer = (store, total, extra = {}) => ({ id: `${store}-${total}`, store, title: `Item ${total}`, total, price: total, condition: "new", ...extra });
 
@@ -48,6 +48,15 @@ describe("popular chains", () => {
     expect(searchChains({ part: "wholebody_up", kind: "blazer" })).toEqual(["zalando", "zara", "hm", "mango"]);
     expect(chainOf("nl.zalando.be")?.id).toBe("zalando");
     expect(chainLinks("be", "men navy blazer").find((l) => l.id === "zalando").url).toBe("https://www.zalando.be/catalogus/?q=navy%20blazer");
+  });
+
+  it("puts Zalando first, then discounted offers, then the cheapest (Black Friday)", () => {
+    const list = shopOrder([
+      offer("H&M", 20), offer("Zara", 30, { oldPrice: 45 }), offer("nl.zalando.be", 60), offer("nl.zalando.be", 50, { oldPrice: 80 }), offer("Uniqlo", 25, { oldPrice: 30 }),
+    ]);
+    expect(list.map((o) => [o.store, o.total])).toEqual([["nl.zalando.be", 50], ["nl.zalando.be", 60], ["Uniqlo", 25], ["Zara", 30], ["H&M", 20]]);
+    expect(chainLinks("be", "men navy blazer")[0].id).toBe("zalando");
+    expect(chainLinks("be", "white sneakers", { shoes: true }).map((l) => l.id).slice(0, 2)).toEqual(["zalando", "footlocker"]);
   });
 
   it("falls back to the chain's search for the product name", () => {

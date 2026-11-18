@@ -81,13 +81,24 @@ export function chainLinks(country, query, { shoes = false, gender = "" } = {}) 
   const s = shopQuery(query);
   const g = queryGender(query, gender);
   const list = CHAINS.filter((c) => c.own && (!c.shoes || shoes));
-  return (shoes ? [...list.filter((c) => c.shoes), ...list.filter((c) => !c.shoes)] : list).map((c) => {
+  // Zalando first (Black Friday), then shoe chains for shoes, then the rest.
+  const rank = (c) => (c.id === "zalando" ? 0 : c.shoes ? 1 : 2);
+  return [...list].sort((a, b) => rank(a) - rank(b)).map((c) => {
     const own = c.search?.(country, s, g) || "";
     return { id: c.id, name: c.name, url: own || googleInside(c, country, s), own: Boolean(own) };
   });
 }
 
-// Popular chains only, new only, at most `perChain` per chain and `max` in all, cheapest first.
+// Black Friday order (the owner's choice, 18.11.2026): Zalando first, then discounted offers, then the
+// cheapest. The «Лучшая цена» badge still goes to the cheapest offer, wherever it is in the list.
+export const isDiscounted = (o) => Boolean(o?.oldPrice && o.oldPrice > o.price);
+export function shopOrder(offers) {
+  const rank = (o) => (chainOf(o.store)?.id === "zalando" ? 0 : 2) + (isDiscounted(o) ? 0 : 1);
+  return [...(offers || [])].sort((a, b) => rank(a) - rank(b) || a.total - b.total);
+}
+
+// Popular chains only, new only, at most `perChain` per chain and `max` in all, in Black Friday order.
+// Within a chain the cheapest offers are kept.
 export function chainOffers(offers, { perChain = 2, max = 10 } = {}) {
   const taken = new Map();
   const out = [];
@@ -100,7 +111,7 @@ export function chainOffers(offers, { perChain = 2, max = 10 } = {}) {
     out.push(o);
     if (out.length >= max) break;
   }
-  return out;
+  return shopOrder(out);
 }
 
 // Where an offer goes when the shop's exact page is unknown: the chain's search for this product
