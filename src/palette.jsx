@@ -12,6 +12,8 @@ import { paletteTask } from "./lib/gemini.js";
 import { canvasToBlob, loadBitmap, makeCanvas } from "./lib/image.js";
 import { applyGains, findWhiteSheet, sampleAt, whiteGains } from "./lib/white-balance.js";
 import { getProfile, saveProfile } from "./lib/settings.js";
+import { getBody } from "./lib/sizes.js";
+import { FaceSticker } from "./face-sticker.jsx";
 import { HintChips, Icon, Segmented } from "./ui.jsx";
 
 // Story image 1080×1920 drawn on a canvas, so no screenshot library is needed.
@@ -19,12 +21,16 @@ async function storyImage(p) {
   const canvas = document.createElement("canvas");
   canvas.width = 1080; canvas.height = 1920;
   const ctx = canvas.getContext("2d");
-  const serif = "Georgia, 'Noto Serif', 'Times New Roman', serif";
-  const sans = "'Inter Variable', Inter, system-ui, sans-serif";
+  const serif = "Prata, Georgia, 'Noto Serif', serif";
+  const sans = "'Golos Text Variable', 'Golos Text', system-ui, sans-serif";
+  // a canvas does not wait for web fonts: load them first, or the picture gets the fallback font
+  await Promise.all([`400 110px ${serif}`, `400 40px ${sans}`, `600 40px ${sans}`].map((f) => document.fonts?.load(f, "Палитра Palette"))).catch(() => {});
+  // a long season name in a wide Didone must still fit the card (830 px from x = 140)
+  const fit = (text, weight, size, family, width) => { let s = size; ctx.font = `${weight} ${s}px ${family}`; while (s > 40 && ctx.measureText(text).width > width) { s -= 4; ctx.font = `${weight} ${s}px ${family}`; } };
   ctx.fillStyle = "#F4EFE7"; ctx.fillRect(0, 0, 1080, 1920);
   ctx.fillStyle = "#1E1B18"; ctx.beginPath(); ctx.roundRect(70, 160, 940, 1600, 72); ctx.fill();
   ctx.fillStyle = "#CFC6BA"; ctx.font = `500 40px ${sans}`; ctx.fillText("Моя палитра", 140, 280);
-  ctx.fillStyle = "#F4EFE7"; ctx.font = `400 110px ${serif}`; ctx.fillText(p.season || "Палитра", 140, 410);
+  ctx.fillStyle = "#F4EFE7"; fit(p.season || "Палитра", 400, 110, serif, 830); ctx.fillText(p.season || "Палитра", 140, 410);
   ctx.fillStyle = "#CFC6BA"; ctx.font = `400 40px ${sans}`; ctx.fillText([p.undertone, p.contrast].filter(Boolean).join(" · "), 140, 480);
   ctx.font = `600 38px ${sans}`; ctx.fillText("Лучшие цвета", 140, 600);
   const cell = 190; const gap = 20;
@@ -71,6 +77,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   const [error, setError] = useState("");
   const [story, setStory] = useState(null);
   const [selfie, setSelfie] = useState(null);
+  const [gender, setGender] = useState(""); // for the sticker face shown until there is a selfie
   const [drape, setDrape] = useState({ best: 0, avoid: 0 });
   const [calib, setCalib] = useState(null); // { url, full, small, sheet, miss } while the photo is being calibrated
   const fileRef = useRef(null);
@@ -78,6 +85,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   useEffect(() => {
     getPalette().then((value) => { setSaved(value); setLoaded(true); });
     blobs.get(SELFIE).then((blob) => { if (blob) setSelfie(URL.createObjectURL(blob)); }).catch(() => {});
+    Promise.all([getBody(), getProfile()]).then(([body, profile]) => setGender(body?.gender || profile?.gender || "")).catch(() => {});
   }, []);
   useEffect(() => () => { if (story) URL.revokeObjectURL(story); }, [story]);
   useEffect(() => () => { if (selfie) URL.revokeObjectURL(selfie); }, [selfie]);
@@ -218,7 +226,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
       ) : (
         <div className="palette-card rise">
           <div className="palette-card__head">
-            <span className="palette-card__avatar" style={{ borderColor: p.metal?.good?.[0] || "#C9A24A" }}>{selfie ? <img src={selfie} alt="Твоё селфи" /> : <Icon name="profile" size={28} color="#CFC6BA" />}</span>
+            <span className="palette-card__avatar" style={{ borderColor: p.metal?.good?.[0] || "#C9A24A" }}>{selfie ? <img src={selfie} alt="Твоё селфи" /> : <span className="palette-card__sticker" style={{ "--drape": p.best[0]?.hex }}><FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} /></span>}</span>
             <div className="palette-card__heading">
               <span className="palette-card__season">{p.season}</span>
               <span className="palette-card__muted">{[p.undertone, p.contrast, p.calibrated ? "по белому листу" : ""].filter(Boolean).join(" · ")}</span>
@@ -230,23 +238,23 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
           <Segmented role="tablist" tone="dark" label="Раздел палитры" value={tab} onChange={setTab} options={[{ id: "colors", label: "Цвета" }, { id: "jewel", label: "Металлы и украшения" }]} />
           {tab === "colors" ? (
             <div className="palette-section">
-              {selfie ? (
-                <div className="drape-row" aria-label="Цвета рядом с лицом">
+              {/* the selfie when there is one, otherwise a sticker face of the person's gender */}
+              <div className="drape-row" aria-label={selfie ? "Цвета рядом с лицом" : "Цвета рядом с лицом, пример"}>
+                <figure className="drape">
+                  <span className="drape__face" style={{ "--drape": p.best[drape.best]?.hex }}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</span>
+                  <figcaption><span className="strong-text">{p.best[drape.best]?.name}</span><span className="palette-card__muted">идёт</span></figcaption>
+                </figure>
+                {p.avoid.length > 0 && (
                   <figure className="drape">
-                    <span className="drape__face" style={{ "--drape": p.best[drape.best]?.hex }}><img src={selfie} alt="" /></span>
-                    <figcaption><span className="strong-text">{p.best[drape.best]?.name}</span><span className="palette-card__muted">идёт</span></figcaption>
+                    <span className="drape__face" style={{ "--drape": p.avoid[drape.avoid]?.hex }}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</span>
+                    <figcaption><span className="strong-text">{p.avoid[drape.avoid]?.name}</span><span className="palette-card__muted">хуже у лица</span></figcaption>
                   </figure>
-                  {p.avoid.length > 0 && (
-                    <figure className="drape">
-                      <span className="drape__face" style={{ "--drape": p.avoid[drape.avoid]?.hex }}><img src={selfie} alt="" /></span>
-                      <figcaption><span className="strong-text">{p.avoid[drape.avoid]?.name}</span><span className="palette-card__muted">хуже у лица</span></figcaption>
-                    </figure>
-                  )}
-                </div>
-              ) : (
-                <button type="button" className="drape-hint" onClick={() => fileRef.current?.click()}><Icon name="camera" size={16} width={2} /> Новое селфи — покажу цвета рядом с лицом</button>
+                )}
+              </div>
+              {!selfie && (
+                <button type="button" className="drape-hint" onClick={() => fileRef.current?.click()}><Icon name="camera" size={16} width={2} /> Это пример. Добавь селфи — покажу цвета рядом с твоим лицом</button>
               )}
-              <span className="palette-card__label">Твои лучшие цвета · {selfie ? "нажми — примерю и объясню" : "нажми, чтобы узнать почему"}</span>
+              <span className="palette-card__label">Твои лучшие цвета · нажми — примерю и объясню</span>
               <div className="swatch-grid">
                 {p.best.map((c, i) => (
                   <button type="button" key={c.hex + i} className={`swatch pop${drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={drape.best === i} onClick={() => setDrape({ ...drape, best: i })}>

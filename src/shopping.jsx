@@ -148,7 +148,12 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   // On a computer the row of cards scrolls with the mouse wheel and the arrows.
   const updateEdges = () => {
     const el = rowRef.current;
-    if (el) setEdges({ left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 });
+    if (!el) return;
+    const left = el.scrollLeft > 4;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
+    // keep the same object when nothing changed: the effect below runs after every render,
+    // and a new object each time made React re-render forever ("Maximum update depth exceeded")
+    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
   };
   const scrollGaps = (dir) => rowRef.current?.scrollBy({ left: dir * rowRef.current.clientWidth * 0.8, behavior: "smooth" });
   useEffect(() => {

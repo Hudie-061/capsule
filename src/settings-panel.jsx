@@ -6,6 +6,7 @@ import { checkConnection } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
 import { clearFeedback, EMPTY_PROFILE, getFeedback, getLearned, getModelReference, getProfile, getSettings, saveLearned, saveProfile, saveSettings, setModelReference } from "./lib/settings.js";
 import { COUNTRIES } from "./lib/countries.js";
+import { plural } from "./lib/plural.js";
 import { getBody, sizesSummary } from "./lib/sizes.js";
 import { AVOID, FITS, GENDERS, GOALS, PLACES, STYLES, genderLabel, joinList, splitList } from "./lib/style-options.js";
 import { Icon } from "./ui.jsx";
@@ -31,10 +32,10 @@ function KnowledgeCard({ items, feedback, learned, onShowRules }) {
     <div className="knowledge rise">
       <span className="knowledge__label">Что я о тебе знаю</span>
       <div className="knowledge__stats">
-        <span><b>{items.length}</b>вещей</span>
-        <span><b>{feedback.length}</b>оценок</span>
-        <span><b>{liked.length}</b>лайков</span>
-        <span><b>{learned.length}</b>правил</span>
+        <span><b>{items.length}</b>{plural(items.length, ["вещь", "вещи", "вещей"])}</span>
+        <span><b>{feedback.length}</b>{plural(feedback.length, ["оценка", "оценки", "оценок"])}</span>
+        <span><b>{liked.length}</b>{plural(liked.length, ["лайк", "лайка", "лайков"])}</span>
+        <span><b>{learned.length}</b>{plural(learned.length, ["правило", "правила", "правил"])}</span>
       </div>
       {loves.length > 0 && <p><span className="knowledge__key">Любишь</span>{loves.join(", ")}</p>}
       {avoids.length > 0 && <p><span className="knowledge__key">Не предлагаю</span>{avoids.join(", ")}</p>}

@@ -1,4 +1,7 @@
-@import "@fontsource-variable/inter";
+/* Fonts «Ателье» (owner's choice, 18.11.2026): Golos Text for text, Prata for headings (in v2.css).
+   Both have Cyrillic and Latin, are bundled in the app (work offline in the APK), SIL Open Font License. */
+@import "@fontsource-variable/golos-text";
+@import "@fontsource/prata";
 
 /* v2 tokens (CLAUDE.md, «Дизайн-токены»). Old names are kept so the item editor keeps working. */
 :root {
@@ -7,7 +10,7 @@
   --muted: #6B6259;
   --line: #E5DACB;
   --accent: #A8360A;
-  font-family: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: "Golos Text Variable", "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
   background: var(--paper);
   font-synthesis: none;
