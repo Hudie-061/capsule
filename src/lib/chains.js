@@ -5,12 +5,15 @@
 // Search pages were opened by hand for Belgium (H&M, Zara, Uniqlo, Mango, Foot Locker). Other
 // countries use the same pattern where the chain sells online; anything else falls back to a Google
 // search inside the chain's site. New Yorker has no search link, so it always uses that fallback.
+import { kindOf } from "./kinds.js";
+
 const q = encodeURIComponent;
 
 const LANG = { be: "nl", nl: "nl", fr: "fr", de: "de", lu: "fr", at: "de", es: "es", it: "it", pt: "pt", ie: "en", pl: "pl", gb: "en", us: "en" };
 const HM = { be: "nl_be", nl: "nl_nl", fr: "fr_fr", de: "de_de", at: "de_at", es: "es_es", it: "it_it", pt: "pt_pt", pl: "pl_pl", gb: "en_gb", us: "en_us" };
 const UNIQLO = new Set(["be", "nl", "fr", "de", "es", "it", "gb", "us"]);
 const MANGO = { be: ["nl", "heren", "dames"], nl: ["nl", "heren", "dames"] };
+const ZALANDO = { be: "zalando.be/catalogus", nl: "zalando.nl/catalogus", fr: "zalando.fr/catalogue", de: "zalando.de/katalog", at: "zalando.at/katalog", gb: "zalando.co.uk/catalogue" };
 const FOOTLOCKER = { be: "footlocker.be/nl", nl: "footlocker.nl/nl", fr: "footlocker.fr/fr", de: "footlocker.de/de", lu: "footlocker.lu/fr", at: "footlocker.at/de", es: "footlocker.es/es", it: "footlocker.it/it", pt: "footlocker.pt/pt", ie: "footlocker.ie/en", pl: "footlocker.pl/pl", gb: "footlocker.co.uk/en", us: "footlocker.com" };
 
 // `match` is tested against the shop name Google Shopping gives (`source`).
@@ -24,6 +27,9 @@ export const CHAINS = [
     search: (c, s) => (UNIQLO.has(c) ? `https://www.uniqlo.com/${c === "gb" ? "uk" : c}/${LANG[c]}/search?q=${q(s)}` : null) },
   { id: "mango", name: "Mango", match: /^mango\b|mango\.com/i, site: "mango.com", own: true,
     search: (c, s, g) => (MANGO[c] ? `https://shop.mango.com/${c}/${MANGO[c][0]}/search/${g === "female" ? MANGO[c][2] : MANGO[c][1]}?q=${q(s)}` : null) },
+  // Not a chain but the biggest fashion marketplace here: many brands, unusual pieces, Black Friday deals.
+  { id: "zalando", name: "Zalando", match: /zalando/i, site: "zalando.com", own: true,
+    search: (c, s) => (ZALANDO[c] ? `https://www.${ZALANDO[c]}/?q=${q(s)}` : null) },
   { id: "newyorker", name: "New Yorker", match: /new\s*yorker/i, site: "newyorker.de", own: true, search: () => null },
   { id: "footlocker", name: "Foot Locker", match: /foot\s*locker/i, site: "footlocker.com", own: true, shoes: true,
     search: (c, s) => (c === "us" ? `https://www.footlocker.com/search?query=${q(s)}` : FOOTLOCKER[c] ? `https://www.${FOOTLOCKER[c]}/search?query=${q(s)}` : null) },
@@ -35,9 +41,14 @@ export const CHAINS = [
   { id: "jd", name: "JD Sports", match: /^jd(\s*sports)?\b/i, site: "jdsports.com", shoes: true },
 ];
 
-// Chains searched one by one in «Популярные» (one paid search each, so four at most; ids match the Worker).
+// Shops searched one by one in «Популярные» (one paid search each, four at most; ids match the Worker).
+// Zalando always (many brands, good for unusual pieces and Black Friday), then the chains that are
+// strongest for this kind of piece.
+const BASICS = new Set(["t-shirt", "shirt", "hoodie", "sweater"]);
 export function searchChains(gap) {
-  return gap?.part === "shoes" ? ["footlocker", "zara", "hm", "mango"] : ["zara", "hm", "uniqlo", "mango"];
+  if (gap?.part === "shoes") return ["zalando", "footlocker", "zara", "hm"];
+  if (BASICS.has(kindOf(gap || {}))) return ["zalando", "uniqlo", "hm", "zara"];
+  return ["zalando", "zara", "hm", "mango"];
 }
 
 export const chainOf = (store) => CHAINS.find((c) => c.match.test(String(store || "").trim())) || null;

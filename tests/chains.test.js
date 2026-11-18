@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, shopQuery } from "../src/lib/chains.js";
+import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopQuery } from "../src/lib/chains.js";
 
 const offer = (store, total, extra = {}) => ({ id: `${store}-${total}`, store, title: `Item ${total}`, total, price: total, condition: "new", ...extra });
 
@@ -11,20 +11,20 @@ describe("popular chains", () => {
     expect(chainOf("Foot Locker Belgium")?.id).toBe("footlocker");
     expect(chainOf("NEW YORKER")?.id).toBe("newyorker");
     expect(chainOf("www2.hm.com/nl_be/index.html")?.id).toBe("hm"); // how Google Shopping names H&M in Belgium
-    expect(chainOf("Zalando")).toBe(null);
+    expect(chainOf("About You")).toBe(null);
     expect(chainOf("Mangopay shop")).toBe(null);
   });
 
   it("keeps at most 2 offers per chain and 10 in all, cheapest first, new only", () => {
     const offers = [
-      offer("H&M", 30), offer("H&M", 20), offer("H&M", 10), offer("Zalando", 5), offer("Zara", 40), offer("Zara", 35, { condition: "used" }),
+      offer("H&M", 30), offer("H&M", 20), offer("H&M", 10), offer("About You", 5), offer("Zara", 40), offer("Zara", 35, { condition: "used" }),
       ...["Uniqlo", "Mango", "C&A", "Bershka", "Pull&Bear", "JBC"].flatMap((s, i) => [offer(s, 50 + i), offer(s, 60 + i)]),
     ];
     const out = chainOffers(offers);
     expect(out).toHaveLength(10);
     expect(out.map((o) => o.total)).toEqual([...out.map((o) => o.total)].sort((a, b) => a - b));
     expect(out.filter((o) => o.store === "H&M").map((o) => o.total)).toEqual([10, 20]);
-    expect(out.some((o) => o.store === "Zalando" || o.condition === "used")).toBe(false);
+    expect(out.some((o) => o.store === "About You" || o.condition === "used")).toBe(false);
   });
 
   it("searches the shops' own sites without gender words or sizes", () => {
@@ -42,8 +42,17 @@ describe("popular chains", () => {
     expect(chainLinks("pl", "jeans").find((l) => l.id === "uniqlo")).toMatchObject({ own: false });
   });
 
+  it("searches Zalando plus the chains that suit the piece, four shops at most", () => {
+    expect(searchChains({ part: "shoes", kind: "sneakers" })).toEqual(["zalando", "footlocker", "zara", "hm"]);
+    expect(searchChains({ part: "upperbody", kind: "t-shirt" })).toEqual(["zalando", "uniqlo", "hm", "zara"]);
+    expect(searchChains({ part: "wholebody_up", kind: "blazer" })).toEqual(["zalando", "zara", "hm", "mango"]);
+    expect(chainOf("nl.zalando.be")?.id).toBe("zalando");
+    expect(chainLinks("be", "men navy blazer").find((l) => l.id === "zalando").url).toBe("https://www.zalando.be/catalogus/?q=navy%20blazer");
+  });
+
   it("falls back to the chain's search for the product name", () => {
     expect(offerFallback({ store: "H&M", title: "Loose Fit Jeans | H&M BE" }, "be")).toBe("https://www2.hm.com/nl_be/search-results.html?q=Loose%20Fit%20Jeans");
-    expect(offerFallback({ store: "Zalando", title: "Straight jeans" }, "nl")).toBe("https://www.google.com/search?q=Straight%20jeans%20Zalando&gl=nl");
+    expect(offerFallback({ store: "About You", title: "Straight jeans" }, "nl")).toBe("https://www.google.com/search?q=Straight%20jeans%20About%20You&gl=nl");
+    expect(offerFallback({ store: "nl.zalando.be", title: "Straight jeans" }, "be")).toBe("https://www.zalando.be/catalogus/?q=Straight%20jeans");
   });
 });

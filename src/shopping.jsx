@@ -56,7 +56,7 @@ const deliveryText = (offer, currency) => (offer.delivery === 0 ? "Беспла�
 
 // Offers are kept on the device for a day, so going back and forth costs nothing.
 // v3: «Популярные» and «все магазины» are separate searches, checked for the right type of piece.
-const offersKey = (country, mode, query) => `offers3:${country}:${mode}:${query.toLowerCase()}`;
+const offersKey = (country, mode, query, sale) => `offers4:${country}:${mode}${sale ? ":sale" : ""}:${query.toLowerCase()}`;
 
 export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAccess, onOpenSizes }) {
   const [cache, setCache] = useState(null);
@@ -72,12 +72,13 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [bought, setBought] = useState("");
   const [fit, setFit] = useState({ body: null, oversize: false });
   const [sizeOn, setSizeOn] = useState(true);
+  const [saleOnly, setSaleOnly] = useState(false); // Black Friday: only discounted offers
   const [direct, setDirect] = useState({}); // offer id → the product page on the shop's site
   const [opening, setOpening] = useState("");
   const [blocked, setBlocked] = useState("");
 
   useEffect(() => {
-    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); });
+    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); setSaleOnly(s.saleOnly); });
     getPurchases().then(setPurchases);
     Promise.all([getBody(), getProfile()]).then(([body, profile]) => setFit({ body: bodyOrProfile(body, profile), oversize: splitList(profile.fits).includes("Оверсайз") }));
   }, []);
@@ -132,7 +133,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   useEffect(() => {
     if (!query || !country || !setupReady || !gap) return undefined;
     let alive = true;
-    const key = offersKey(country, mode, query);
+    const key = offersKey(country, mode, query, saleOnly);
     (async () => {
       const saved = await kv.get(key, null);
       if (!alive) return;
@@ -141,7 +142,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       setOffers({ status: "loading", data: null, error: "" });
       try {
         const want = { name: gap.item, kind: kindOf(gap), color: gap.color };
-        const data = await pricesTask({ query, country, want, chains: mode === "chains" ? searchChains(gap) : [] });
+        const data = await pricesTask({ query, country, want, sale: saleOnly, chains: mode === "chains" ? searchChains(gap) : [] });
         if (!alive) return;
         await kv.set(key, data);
         setOffers({ status: "done", data, error: "" });
@@ -153,7 +154,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, mode, country, setupReady, pricesOff]);
+  }, [query, mode, country, setupReady, pricesOff, saleOnly]);
 
   const list = useMemo(() => {
     const all = offers.data?.offers || [];
@@ -193,6 +194,13 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     const tab = window.open(target, "_blank");
     if (!tab) { setBlocked(id); return; }
     try { tab.opener = null; } catch { /* already another site */ }
+  };
+
+  const toggleSale = async () => {
+    const next = !saleOnly;
+    setSaleOnly(next);
+    setBought("");
+    await saveSettings({ saleOnly: next });
   };
 
   const toggleSize = async () => {
@@ -287,6 +295,11 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             <div className="filter-row" role="group" aria-label="Состояние">
               {FILTERS.map((f) => <button type="button" key={f.id} className={`filter-pill${filter === f.id ? " is-on" : ""}`} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>{f.label}</button>)}
             </div>
+          </div>
+          <div className="sale-row">
+            <button type="button" className={`sale-chip${saleOnly ? " is-on" : ""}`} aria-pressed={saleOnly} onClick={toggleSale}>
+              {saleOnly ? <Icon name="check" size={14} width={2.6} /> : <span aria-hidden="true">%</span>} Только со скидкой
+            </button>
             <span className="tiny-text">цена с доставкой</span>
           </div>
 
@@ -330,7 +343,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
               </div>
             ) : (
               <p className="muted-text">
-                {filter === "chains"
+                {saleOnly
+                  ? "Со скидкой такой вещи сейчас не нашлось. Выключи «Только со скидкой» или поищи прямо на сайтах."
+                  : filter === "chains"
                   ? "В популярных магазинах такой вещи не нашлось. Поищи прямо у них на сайте или посмотри «Все новые»."
                   : filter === "new" ? "Новых предложений нет — посмотри «Б/у» или сайты магазинов." : "Б/у предложений нет — поищи на сайтах ниже."}
               </p>
@@ -362,7 +377,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                 </div>
               )}
               <p className="tiny-text center-text">
-                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · до 2 вещей из магазина" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
+                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · до 2 вещей из магазина" : ""}${saleOnly ? " · только скидки" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
               </p>
             </>
           )}

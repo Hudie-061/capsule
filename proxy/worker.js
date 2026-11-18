@@ -408,9 +408,24 @@ const CHAINS = {
   newyorker: { name: "New Yorker", match: /new\s*yorker/i },
   footlocker: { name: "Foot Locker", match: /foot\s*locker/i },
   ca: { name: "C&A", match: /^c\s*&\s*a\b|c-and-a\.com/i },
+  // Not a chain but the biggest fashion marketplace in the region (many brands, Black Friday deals);
+  // Google names it "nl.zalando.be" or "zalando.be en". Second-hand Zalando offers are dropped as used.
+  zalando: { name: "Zalando", match: /zalando/i },
 };
 const MAX_CHAINS = 4;
 const PER_CHAIN = 2;
+
+// The chain's name plus a long query ("H&M men navy wool blazer tailored fit") often finds nothing at all,
+// so a chain is asked for the essentials only: gender, colour and the type of piece ("H&M men navy blazer").
+// The relevance check then keeps the right ones.
+const COLOUR_WORDS = /\b(light|dark|pale|deep|navy|black|white|off-white|ecru|cream|ivory|beige|sand|stone|camel|tan|khaki|olive|green|sage|blue|denim|indigo|grey|gray|charcoal|anthracite|silver|brown|chocolate|burgundy|wine|red|pink|rose|orange|rust|terracotta|yellow|mustard|gold|purple|lilac|lavender|teal|turquoise)\b/gi;
+function chainQuery(req) {
+  if (!req.want.kind) return req.query;
+  const words = req.query.toLowerCase();
+  const gender = /\bwomen'?s?\b/.test(words) ? "women" : /\bmen'?s?\b/.test(words) ? "men" : "";
+  const colours = [...new Set(words.match(COLOUR_WORDS) || [])].slice(0, 2).join(" ");
+  return [gender, colours, req.want.kind].filter(Boolean).join(" ");
+}
 
 const searchText = (value) => text(value, 100).replace(/[^\p{L}\p{N} '-]/gu, " ").replace(/\s+/g, " ").trim();
 
@@ -422,21 +437,25 @@ function priceRequest(input) {
   // What the person is looking for, so offers of another type or colour can be dropped (see `relevant`).
   const w = input?.want && typeof input.want === "object" ? input.want : {};
   const want = { name: text(w.name, 80), kind: kind(w.kind), color: HEX.test(w.color || "") ? w.color : "" };
-  return { query, country, currency: COUNTRIES[country], chains, want };
+  // `sale`: only discounted offers (Google Shopping's on_sale filter) — for Black Friday.
+  return { query, country, currency: COUNTRIES[country], chains, want, sale: input?.sale === true };
 }
 
 const hashKey = async (prefix, value) => {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return `${prefix}${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 };
-// v3: chain searches and the relevance check, so v1/v2 answers are not reused.
-const priceKey = (req) => hashKey("prices:v3:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}`);
+// v4: short chain queries and the sale filter, so older answers are not reused.
+const priceKey = (req) => hashKey("prices:v4:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}|${req.sale ? "sale" : ""}`);
 
-async function googleShopping(env, q, country) {
+// "Google hasn't returned any results for this query." is an answer (nothing found), not a failure.
+const NO_RESULTS = /hasn.t returned any results|no results/i;
+async function googleShopping(env, q, country, { sale = false } = {}) {
   const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
-  url.search = new URLSearchParams({ engine: "google_shopping", q, gl: country, hl: "en", api_key: env.SERPAPI_KEY }).toString();
+  url.search = new URLSearchParams({ engine: "google_shopping", q, gl: country, hl: "en", ...(sale ? { on_sale: "true" } : {}), api_key: env.SERPAPI_KEY }).toString();
   const response = await fetch(url.toString());
   const data = await response.json().catch(() => ({}));
+  if (data.error && NO_RESULTS.test(String(data.error))) return [];
   if (!response.ok || data.error) throw new TaskError(502, `Поиск цен не ответил${data.error ? `: ${text(data.error, 120)}` : ""}. Попробуй позже.`);
   return data.shopping_results;
 }
@@ -693,7 +712,8 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
       if (req.chains.length) {
         const chains = req.chains.slice(0, Math.max(1, budget));
         searches = chains.length;
-        const found = await Promise.allSettled(chains.map((id) => googleShopping(env, `${CHAINS[id].name} ${req.query}`, req.country)));
+        const q = chainQuery(req);
+        const found = await Promise.allSettled(chains.map((id) => googleShopping(env, `${CHAINS[id].name} ${q}`, req.country, { sale: req.sale })));
         if (found.every((f) => f.status === "rejected")) throw found[0].reason;
         const own = found.flatMap((f, i) => (f.status === "fulfilled"
           ? normalizeOffers(f.value, { keepOrder: true })
@@ -706,9 +726,9 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
         offers = kept.filter((o) => (taken[o.chain] = (taken[o.chain] || 0) + 1) <= PER_CHAIN).sort((a, b) => a.total - b.total);
       } else {
         searches = 1;
-        offers = await relevant(env, req, normalizeOffers(await googleShopping(env, req.query, req.country)));
+        offers = await relevant(env, req, normalizeOffers(await googleShopping(env, req.query, req.country, { sale: req.sale })));
       }
-      const result = { query: req.query, country: req.country, currency: req.currency, chains: req.chains, offers, searches, at: new Date().toISOString() };
+      const result = { query: req.query, country: req.country, currency: req.currency, chains: req.chains, sale: req.sale, offers, searches, at: new Date().toISOString() };
       try { await env.USAGE.put(await priceKey(req), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 }); }
       catch (error) { console.error("capsule-proxy: price cache not saved", error?.message || error); }
       return result;

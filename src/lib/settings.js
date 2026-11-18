@@ -29,6 +29,7 @@ export async function getSettings() {
     country: typeof saved.country === "string" && /^[a-z]{2}$/.test(saved.country) ? saved.country : "be",
     // Add the user's size to shop searches («Мой размер» in «Покупки»); on unless turned off.
     sizeInSearch: saved.sizeInSearch !== false,
+    saleOnly: saved.saleOnly === true,
   };
 }
 

@@ -358,7 +358,8 @@ describe("price search", () => {
     const res = await search({ query: "men navy wool blazer", country: "be", chains: ["zara", "hm", "spaceship"], want: { name: "Тёмно-синий блейзер", kind: "blazer", color: "#1f2a44" } }, e);
     expect(res.status).toBe(200);
     const out = await res.json();
-    expect(upstream.filter((c) => c.serp).map((c) => new URL(c.url).searchParams.get("q"))).toEqual(["Zara men navy wool blazer", "H&M men navy wool blazer"]);
+    // a chain is asked only for gender, colour and type: long queries with a chain name often find nothing
+    expect(upstream.filter((c) => c.serp).map((c) => new URL(c.url).searchParams.get("q"))).toEqual(["Zara men navy blazer", "H&M men navy blazer"]);
     expect(out.offers.map((o) => [o.store, o.title, o.total])).toEqual([
       ["H&M", "Regular Fit wool-blend blazer", 89.99],
       ["Zara", "Textured blazer", 99.95],
@@ -366,6 +367,21 @@ describe("price search", () => {
     ]);
     expect(out.searches).toBe(2);
     expect(e.USAGE.map.get(`${new Date().toISOString().slice(0, 7)}:all:search`)).toBe("2"); // two paid searches from the monthly budget
+  });
+
+  it("treats 'no results' as an empty answer, not as an error, and passes the sale filter", async () => {
+    serp = (url) => (url.searchParams.get("q").startsWith("Zalando")
+      ? { shopping_results: [{ title: "Slim fit blazer navy", source: "nl.zalando.be", product_id: "za1", immersive_product_page_token: "eyJ6YWxhbmRvIjoiMSJ9", extracted_price: 59.95, extracted_old_price: 99.95 }] }
+      : { error: "Google hasn't returned any results for this query." });
+    const res = await search({ query: "men navy wool blazer", country: "be", chains: ["uniqlo", "zalando"], sale: true, want: { name: "Тёмно-синий блейзер", kind: "blazer" } }, env({ SERPAPI_KEY: "k" }));
+    expect(res.status).toBe(200);
+    const out = await res.json();
+    expect(out.offers.map((o) => [o.store, o.oldPrice])).toEqual([["Zalando", 99.95]]);
+    expect(out.sale).toBe(true);
+    expect(upstream.filter((c) => c.serp).every((c) => new URL(c.url).searchParams.get("on_sale") === "true")).toBe(true);
+    serp = { error: "Google hasn't returned any results for this query." };
+    const empty = await (await search({ query: "men purple tweed waistcoat", country: "be", want: { name: "Жилет", kind: "waistcoat" } }, env({ SERPAPI_KEY: "k" }))).json();
+    expect(empty.offers).toEqual([]);
   });
 
   it("drops results of another type from a search in all shops", async () => {
