@@ -34,7 +34,8 @@ export async function getSettings() {
     chosenSizes: saved.chosenSizes && typeof saved.chosenSizes === "object" ? saved.chosenSizes : {},
     // «Чего не хватает»: what the person asked for last time (refresh sheet), what was already shown
     // (for variety) and what they closed with ×.
-    gapWishes: { categories: [], budget: 50, style: "", note: "", ...(saved.gapWishes && typeof saved.gapWishes === "object" ? saved.gapWishes : {}) },
+    // budgetSet: the person chose the budget themself (until then «Покупки» asks for it)
+    gapWishes: { categories: [], budget: 50, style: "", note: "", budgetSet: false, ...(saved.gapWishes && typeof saved.gapWishes === "object" ? saved.gapWishes : {}) },
     gapsSeen: Array.isArray(saved.gapsSeen) ? saved.gapsSeen : [],
     gapsDismissed: Array.isArray(saved.gapsDismissed) ? saved.gapsDismissed : [],
   };

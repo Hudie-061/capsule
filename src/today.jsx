@@ -526,9 +526,15 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           })}
         </div>
         {alternatives.length < 2 && <p className="muted-text">Других вещей этой категории пока нет. Добавь их кнопкой «＋» или найди новую.</p>}
-        <button type="button" className="dark-link" onClick={() => { const piece = swapping; setSwapId(null); onNavigate("shopping", { focus: { label: `Похожее на: ${piece.name}`, part: piece.part, kind: piece.kind, color: piece.color, query: piece.name } }); }}>
+        {/* Not a copy of this piece: the stylist suggests different ones that suit the rest of the outfit. */}
+        <button type="button" className="dark-link" onClick={() => {
+          const piece = swapping;
+          setSwapId(null);
+          const outfit = pieces.filter((p) => p.id !== piece.id).map((p) => ({ name: p.name, part: p.part, color: p.color, kind: p.kind }));
+          onNavigate("shopping", { focus: { replace: { name: piece.name, part: piece.part, kind: piece.kind, color: piece.color, outfit } } });
+        }}>
           <span className="dark-link__icon"><Icon name="bag" size={20} width={1.9} /></span>
-          <span className="dark-link__text"><span>Нет подходящих? Найдём дешевле</span><small>Новое и б/у — в магазинах Бельгии</small></span>
+          <span className="dark-link__text"><span>Нет подходящих? Подберём другую</span><small>Другой цвет или фасон — под этот образ, в твоём размере</small></span>
           <Icon name="chevron" size={20} width={2} />
         </button>
       </Sheet>

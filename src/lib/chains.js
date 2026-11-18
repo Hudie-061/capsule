@@ -40,23 +40,40 @@ function zalandoLink(c, s, g, { size = null, sale = false, budget = 0 } = {}) {
 }
 const FOOTLOCKER = { be: "footlocker.be/nl", nl: "footlocker.nl/nl", fr: "footlocker.fr/fr", de: "footlocker.de/de", lu: "footlocker.lu/fr", at: "footlocker.at/de", es: "footlocker.es/es", it: "footlocker.it/it", pt: "footlocker.pt/pt", ie: "footlocker.ie/en", pl: "footlocker.pl/pl", gb: "footlocker.co.uk/en", us: "footlocker.com" };
 
+// Filters in the other shops' links, checked by hand on the Belgian sites 18.11.2026:
+// H&M sort=ascPrice and letter sizes as sizes=menswear;NO_FORMAT[SML];L (their numeric sizes use other
+// formats, so only letters); Uniqlo sort=2; Foot Locker sort=price-asc. Zara and Mango keep no filters in
+// the address, so their links stay a plain search.
+function hmLink(c, s, g, { size = null } = {}) {
+  if (!HM[c]) return null;
+  const params = new URLSearchParams({ q: s });
+  if (size?.system === "letter" && size.pick && (g === "male" || g === "female")) params.set("sizes", `${g === "female" ? "womenswear" : "menswear"};NO_FORMAT[SML];${size.pick}`);
+  params.set("sort", "ascPrice");
+  return `https://www2.hm.com/${HM[c]}/search-results.html?${params.toString()}`;
+}
+
+// About You (aboutyou.be/.nl/.de…): its own search has no address with the query in it, so the link is a
+// Google search inside the country's About You site. Its offers come from the price search like the rest.
+const ABOUTYOU = { be: "aboutyou.be", nl: "aboutyou.nl", de: "aboutyou.de", at: "aboutyou.at", pl: "aboutyou.pl", es: "aboutyou.es", it: "aboutyou.it", pt: "aboutyou.pt", ie: "aboutyou.ie", lu: "aboutyou.lu" };
+
 // `match` is tested against the shop name Google Shopping gives (`source`).
 // `own` = shown as a search link; the rest only count as popular when they appear in offers.
 export const CHAINS = [
   { id: "zara", name: "Zara", match: /^zara\b|zara\.com/i, site: "zara.com", own: true,
     search: (c, s, g) => `https://www.zara.com/${c === "gb" ? "uk" : c}/${LANG[c]}/search?searchTerm=${q(s)}${g ? `&section=${g === "female" ? "WOMAN" : "MAN"}` : ""}` },
-  { id: "hm", name: "H&M", match: /^h\s*&\s*m\b|^h&amp;m\b|(^|\.)hm\.com/i, site: "hm.com", own: true,
-    search: (c, s) => (HM[c] ? `https://www2.hm.com/${HM[c]}/search-results.html?q=${q(s)}` : null) },
+  { id: "hm", name: "H&M", match: /^h\s*&\s*m\b|^h&amp;m\b|(^|\.)hm\.com/i, site: "hm.com", own: true, search: hmLink },
   { id: "uniqlo", name: "Uniqlo", match: /uniqlo/i, site: "uniqlo.com", own: true,
-    search: (c, s) => (UNIQLO.has(c) ? `https://www.uniqlo.com/${c === "gb" ? "uk" : c}/${LANG[c]}/search?q=${q(s)}` : null) },
+    search: (c, s) => (UNIQLO.has(c) ? `https://www.uniqlo.com/${c === "gb" ? "uk" : c}/${LANG[c]}/search?q=${q(s)}&sort=2` : null) },
   { id: "mango", name: "Mango", match: /^mango\b|mango\.com/i, site: "mango.com", own: true,
     search: (c, s, g) => (MANGO[c] ? `https://shop.mango.com/${c}/${MANGO[c][0]}/search/${g === "female" ? MANGO[c][2] : MANGO[c][1]}?q=${q(s)}` : null) },
   // Not a chain but the biggest fashion marketplace here: many brands, unusual pieces, Black Friday deals.
   { id: "zalando", name: "Zalando", match: /zalando/i, site: "zalando.com", own: true, filters: true,
     search: zalandoLink },
+  // The other big fashion marketplace in Belgium, the Netherlands and Germany.
+  { id: "aboutyou", name: "About You", match: /about\s*you/i, site: "aboutyou.com", sites: ABOUTYOU, own: true, search: () => null },
   { id: "newyorker", name: "New Yorker", match: /new\s*yorker/i, site: "newyorker.de", own: true, search: () => null },
   { id: "footlocker", name: "Foot Locker", match: /foot\s*locker/i, site: "footlocker.com", own: true, shoes: true,
-    search: (c, s) => (c === "us" ? `https://www.footlocker.com/search?query=${q(s)}` : FOOTLOCKER[c] ? `https://www.${FOOTLOCKER[c]}/search?query=${q(s)}` : null) },
+    search: (c, s) => (c === "us" ? `https://www.footlocker.com/search?query=${q(s)}&sort=price-asc` : FOOTLOCKER[c] ? `https://www.${FOOTLOCKER[c]}/search?query=${q(s)}&sort=price-asc` : null) },
   { id: "ca", name: "C&A", match: /^c\s*&\s*a\b/i, site: "c-and-a.com" },
   { id: "pullbear", name: "Pull&Bear", match: /pull\s*(&|and)\s*bear/i, site: "pullandbear.com" },
   { id: "bershka", name: "Bershka", match: /bershka/i, site: "bershka.com" },
@@ -65,14 +82,14 @@ export const CHAINS = [
   { id: "jd", name: "JD Sports", match: /^jd(\s*sports)?\b/i, site: "jdsports.com", shoes: true },
 ];
 
-// Shops searched one by one in «Популярные» (one paid search each, four at most; ids match the Worker).
-// Zalando always (many brands, good for unusual pieces and Black Friday), then the chains that are
-// strongest for this kind of piece.
+// Shops searched one by one in «Популярные» (one paid search each, five at most; ids match the Worker).
+// The two marketplaces always (Zalando, About You: many brands, unusual pieces, Black Friday deals),
+// then the chains that are strongest for this kind of piece.
 const BASICS = new Set(["t-shirt", "shirt", "hoodie", "sweater"]);
 export function searchChains(gap) {
-  if (gap?.part === "shoes") return ["zalando", "footlocker", "zara", "hm"];
-  if (BASICS.has(kindOf(gap || {}))) return ["zalando", "uniqlo", "hm", "zara"];
-  return ["zalando", "zara", "hm", "mango"];
+  if (gap?.part === "shoes") return ["zalando", "aboutyou", "footlocker", "zara", "hm"];
+  if (BASICS.has(kindOf(gap || {}))) return ["zalando", "aboutyou", "uniqlo", "hm", "zara"];
+  return ["zalando", "aboutyou", "zara", "hm", "mango"];
 }
 
 export const chainOf = (store) => CHAINS.find((c) => c.match.test(String(store || "").trim())) || null;
@@ -93,7 +110,7 @@ export function queryGender(text, fallback = "") {
   return fallback === "female" || fallback === "male" ? fallback : "";
 }
 
-const googleInside = (chain, country, s) => `https://www.google.com/search?q=${q(`${s} site:${chain.site}`)}&gl=${country}`;
+const googleInside = (chain, country, s) => `https://www.google.com/search?q=${q(`${s} site:${chain.sites?.[country] || chain.site}`)}&gl=${country}`;
 
 // A link that searches the chain's own site (or Google inside it) for this text. `filters` (size, sale,
 // budget) are added where the shop's link supports them (Zalando).
@@ -111,8 +128,8 @@ export function chainLinks(country, query, { shoes = false, gender = "", filters
   const s = shopQuery(query);
   const g = queryGender(query, gender);
   const list = CHAINS.filter((c) => c.own && (!c.shoes || shoes));
-  // Zalando first (Black Friday), then shoe chains for shoes, then the rest.
-  const rank = (c) => (c.id === "zalando" ? 0 : c.shoes ? 1 : 2);
+  // Zalando and About You first (Black Friday), then shoe chains for shoes, then the rest.
+  const rank = (c) => (c.id === "zalando" ? 0 : c.id === "aboutyou" ? 1 : c.shoes ? 2 : 3);
   return [...list].sort((a, b) => rank(a) - rank(b)).map((c) => {
     const own = c.search?.(country, s, g, filters) || "";
     return { id: c.id, name: c.name, url: own || googleInside(c, country, s), own: Boolean(own) };

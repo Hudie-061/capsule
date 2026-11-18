@@ -350,6 +350,13 @@ button:disabled { cursor: default; }
 .zalando-card__logo { width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px; background: #FF6900; color: #fff; font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; }
 .zalando-card__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .wish-form { display: flex; flex-direction: column; gap: 10px; }
+.budget-row { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 18px; border: 1px solid var(--border); background: var(--card); }
+.budget-row.is-asking { border: 2px dashed var(--warn); padding: 9px 11px; }
+.budget-row__label { font-size: 13px; font-weight: 600; color: var(--text-tag); }
+.budget-row.is-asking .budget-row__label { color: var(--warn); }
+.budget-row__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.budget-chip { min-height: 34px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--chip); color: var(--dark); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; font-variant-numeric: tabular-nums; }
+.budget-chip.is-on { background: var(--dark); color: var(--on-dark); border-color: var(--dark); }
 .wish-form .section-label { margin-top: 6px; }
 .wish-form__note small { font-weight: 400; color: var(--text-2); }
 .my-size { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 12px; }

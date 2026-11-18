@@ -89,8 +89,9 @@ export async function planTask({ items, profile, feedback, learned, occasion, co
 
 // wishes: { categories, budget, style, note } from the refresh sheet; shown / dismissed / bought: names
 // of pieces suggested before, closed with ×, and bought, so the next suggestions are different.
-export async function gapsTask({ items, profile, feedback, learned, wishes = null, shown = [], dismissed = [], bought = [] }) {
-  return task("gaps", { wardrobe: items.map(plainItem), profile, feedback, learned, wishes, shown, dismissed, bought });
+// replace: { name, part, kind, color, outfit } — a piece of an outfit to replace with something different.
+export async function gapsTask({ items, profile, feedback, learned, wishes = null, shown = [], dismissed = [], bought = [], replace = null }) {
+  return task("gaps", { wardrobe: items.map(plainItem), profile, feedback, learned, wishes, shown, dismissed, bought, replace });
 }
 
 export async function learnTask({ comment, outfitItems, liked, rules }) {

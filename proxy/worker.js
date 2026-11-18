@@ -321,6 +321,18 @@ const WISH_CATEGORIES = {
 };
 const names = (value, n) => (Array.isArray(value) ? value : []).slice(0, n).map((x) => text(x, 80)).filter(Boolean);
 
+// «Нет подходящих? Подберём другую» on «Сегодня»: the person wants a DIFFERENT piece instead of one in
+// an outfit, not a copy of it. Returns the prompt part, or "" when nothing is being replaced.
+function replaceText(input) {
+  const r = input?.replace && typeof input.replace === "object" ? input.replace : null;
+  if (!r || !text(r.name, 80)) return "";
+  const piece = item({ name: r.name, part: r.part, color: r.color, kind: r.kind });
+  const rest = (Array.isArray(r.outfit) ? r.outfit : []).slice(0, 6).map(item).map((i) => `${i.name} (${PART_NAMES[i.part]}, ${i.color})`);
+  return `REPLACE ONE PIECE OF AN OUTFIT
+The person wants something DIFFERENT instead of ${quote(`${piece.name} (${PART_NAMES[piece.part]}${piece.kind ? `, ${piece.kind}` : ""}, ${piece.color})`)} in an outfit with: ${quote(rest.join("; ") || "nothing else")}.
+Return exactly 3 pieces of the same category ("part": ${piece.part}) that are NOT the same piece in a similar colour: change the colour (from the person's palette, in harmony with the rest of the outfit), the cut or the material. Each must work with the rest of the outfit; "why" says how it changes the outfit. "pairsWith" may stay empty.`;
+}
+
 function wishesText(input) {
   const w = input?.wishes && typeof input.wishes === "object" ? input.wishes : {};
   const categories = (Array.isArray(w.categories) ? w.categories : []).filter((id) => typeof id === "string" && Object.hasOwn(WISH_CATEGORIES, id)).map((id) => WISH_CATEGORIES[id]);
@@ -517,8 +529,10 @@ const CHAINS = {
   // Not a chain but the biggest fashion marketplace in the region (many brands, Black Friday deals);
   // Google names it "nl.zalando.be" or "zalando.be en". Second-hand Zalando offers are dropped as used.
   zalando: { name: "Zalando", match: /zalando/i },
+  // the other big fashion marketplace in Belgium, the Netherlands and Germany (Google: "ABOUT YOU")
+  aboutyou: { name: "About You", match: /about\s*you/i },
 };
-const MAX_CHAINS = 4;
+const MAX_CHAINS = 5;
 const PER_CHAIN = 2;
 
 // The chain's name plus a long query ("H&M men navy wool blazer tailored fit") often finds nothing at all,
@@ -759,6 +773,7 @@ PAST RATINGS
 ${feedbackText(fb, items)}
 
 ${wishesText(input)}
+${replaceText(input)}
 
 For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence naming which owned pieces it goes with and what it adds (and why its colour suits the person when the palette is known), "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "kind" = its exact type as one short lowercase English noun (e.g. "blazer", "shirt", "hoodie", "jeans", "boots", "bag", "chain"), "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" from the profile gender, or only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
       // a bit more randomness than before, so «обновить» brings new pieces

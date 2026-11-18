@@ -256,6 +256,22 @@ describe("no general-purpose access", () => {
     expect(body.generationConfig.temperature).toBe(0.8);
   });
 
+  it("asks for a DIFFERENT piece when the person replaces one in an outfit", async () => {
+    await worker.fetch(call("/api/gaps", {
+      wardrobe,
+      replace: { name: "Тёмно-синяя куртка", part: "wholebody_up", kind: "jacket", color: "#1f2a44", outfit: [{ name: "Белая футболка", part: "upperbody", color: "#ffffff" }, { name: "Синие джинсы", part: "lowerbody", color: "#2b3a55" }] },
+    }), env());
+    const { prompt } = upstream[0];
+    expect(prompt).toContain("REPLACE ONE PIECE OF AN OUTFIT");
+    expect(prompt).toContain("<user_data>Тёмно-синяя куртка (outerwear/dress, jacket, #1f2a44)</user_data>");
+    expect(prompt).toContain("Белая футболка (top, #ffffff)");
+    expect(prompt).toContain("NOT the same piece in a similar colour");
+    // without a piece to replace the part is left out
+    upstream = [];
+    await worker.fetch(call("/api/gaps", { wardrobe }), env());
+    expect(upstream[0].prompt).not.toContain("REPLACE ONE PIECE");
+  });
+
   it("analyses a selfie palette with the fixed fan of the season and refuses photos without a face", async () => {
     const out = await (await worker.fetch(call("/api/palette", { image: PNG, calibrated: true }), env())).json();
     expect(upstream[0].prompt).toMatch(/ONLY to choose clothing colours/);

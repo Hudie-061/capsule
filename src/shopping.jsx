@@ -81,6 +81,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [wishes, setWishes] = useState({ categories: [], budget: 50, style: "", note: "" });
   const [wishOpen, setWishOpen] = useState(false);
   const [dismissed, setDismissed] = useState([]);
+  const [alts, setAlts] = useState({ key: null, status: "idle", items: [] }); // «Подберём другую» from «Сегодня»
   const rowRef = useRef(null);
   const [edges, setEdges] = useState({ left: false, right: false });
   const [sizeOn, setSizeOn] = useState(true);
@@ -117,7 +118,16 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     }
   }, [items, wishes]);
 
+  // The budget row: one tap, saved for next time; the offers and the Zalando link follow it.
+  const chooseBudget = async (b) => {
+    const next = { ...wishes, budget: b, budgetSet: true };
+    setWishes(next);
+    setBought("");
+    await saveSettings({ gapWishes: next });
+  };
+
   const runWishes = async (w) => {
+    w = { ...w, budgetSet: true };
     setWishOpen(false);
     setWishes(w);
     await saveSettings({ gapWishes: w });
@@ -167,11 +177,36 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupReady, refreshKey]);
 
-  // A piece opened from «Сегодня» («Нет подходящих? Найдём дешевле») comes first.
+  // «Нет подходящих? Подберём другую» on «Сегодня»: the stylist suggests 3 different pieces for that place in
+  // the outfit (another colour or cut that suits the rest), shown first. Older links with a plain label still work.
+  useEffect(() => {
+    const r = focus?.replace;
+    if (!r || !setupReady) return undefined;
+    let alive = true;
+    const key = JSON.stringify(r);
+    setAlts({ key, status: "loading", items: [] });
+    (async () => {
+      try {
+        const settings = await getSettings();
+        const result = await findGaps({
+          items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: (await getPalette())?.result || null,
+          wishes: { ...settings.gapWishes, categories: [] }, dismissed: settings.gapsDismissed.slice(0, 30), replace: r,
+        });
+        if (alive) { setAlts({ key, status: "done", items: (result.items || []).slice(0, 3).map((g) => ({ ...g, focus: true, replaceOf: r.name })) }); setSelected(0); }
+      } catch (e) {
+        if (alive) setAlts({ key, status: "error", items: [], error: e.message });
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, setupReady]);
+
   const gaps = useMemo(() => {
     const list = cache?.result?.items || [];
-    return focus ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: "Похожие вещи — новые и б/у.", focus: true }, ...list] : list;
-  }, [cache, focus]);
+    if (focus?.replace) return [...alts.items, ...list];
+    return focus?.label ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: "Похожие вещи — новые и б/у.", focus: true }, ...list] : list;
+  }, [cache, focus, alts]);
+  const altsLoading = Boolean(focus?.replace) && alts.status === "loading";
   const gap = gaps[Math.min(selected, gaps.length - 1)] || null;
   // The size for this kind of piece: the user's own pick in «Покупки» wins over the measurements.
   const sizeGender = fit.body?.gender || fit.gender;
@@ -342,12 +377,13 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         <div className="gap-scroll">
           {edges.left && <button type="button" className="gap-arrow gap-arrow--left" onClick={() => scrollGaps(-1)} aria-label="Прокрутить назад"><Icon name="back" size={16} width={2.4} /></button>}
           <div className="gap-row" role="group" aria-label="Чего не хватает" ref={rowRef} onScroll={updateEdges}>
+            {altsLoading && [0, 1, 2].map((i) => <span key={`alt-${i}`} className="gap-card shimmer gap-card--skeleton" aria-label="Подбираю другую вещь" />)}
             {gaps.map((g, i) => (
               <div className="gap-slot rise" key={`${g.item}-${i}`} style={{ animationDelay: `${i * 0.05}s` }}>
                 <button type="button" className={`gap-card${i === selected ? " is-on" : ""}`} aria-pressed={i === selected} onClick={() => { setSelected(i); setBought(""); }}>
                   <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
                   <span className="gap-card__name">{g.item}</span>
-                  <span className="gap-card__impact">{g.focus ? "из образа" : impact(g, items)}</span>
+                  <span className="gap-card__impact">{g.replaceOf ? "вместо твоей" : g.focus ? "из образа" : impact(g, items)}</span>
                 </button>
                 {!g.focus && <button type="button" className="gap-card__x" onClick={() => dismiss(g)} aria-label={`Больше не предлагать: ${g.item}`} title="Больше не предлагать"><Icon name="close" size={12} width={2.6} /></button>}
               </div>
@@ -357,7 +393,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           {edges.right && <button type="button" className="gap-arrow gap-arrow--right" onClick={() => scrollGaps(1)} aria-label="Прокрутить вперёд"><Icon name="chevron" size={16} width={2.4} /></button>}
         </div>
       )}
-      {gap?.why && <p className="muted-text gap-why fade" key={gap.item}>{gap.why}</p>}
+      {altsLoading && <p className="muted-text gap-why">Подбираю другую вещь вместо «{focus.replace.name}» — под остальной образ…</p>}
+      {focus?.replace && alts.status === "error" && <p className="error-text">{alts.error}</p>}
+      {gap?.why && !altsLoading && <p className="muted-text gap-why fade" key={gap.item}>{gap.replaceOf ? `Вместо «${gap.replaceOf}»: ${gap.why}` : gap.why}</p>}
       {gap && system && (
         <div className="my-size fade" key={`size-${gap.item}`}>
           <button type="button" className={`my-size__chip${size ? " is-on" : ""}`} onClick={() => setSizeOpen(true)} aria-haspopup="dialog">
@@ -371,6 +409,18 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
               : "нажми, чтобы искать вещи твоего размера"}
           </span>
           {size?.note && <span className="size-card__note my-size__note">{size.note}</span>}
+        </div>
+      )}
+      {gap && (
+        <div className={`budget-row fade${wishes.budgetSet ? "" : " is-asking"}`} role="group" aria-label="Бюджет на вещь">
+          <span className="budget-row__label">{wishes.budgetSet ? "Бюджет на вещь" : "Сколько готов потратить на вещь?"}</span>
+          <div className="budget-row__chips">
+            {BUDGETS.map((b) => (
+              <button type="button" key={b} className={`budget-chip${wishes.budgetSet && wishes.budget === b ? " is-on" : ""}`} aria-pressed={wishes.budgetSet && wishes.budget === b} onClick={() => chooseBudget(b)}>
+                {b ? `до ${money(b, currency)}` : "любой"}
+              </button>
+            ))}
+          </div>
         </div>
       )}
       {error && error !== "setup" && gaps.length > 0 && <p className="error-text">{error}</p>}
