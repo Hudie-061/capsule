@@ -542,7 +542,7 @@ const COLOUR_WORDS = /\b(light|dark|pale|deep|navy|black|white|off-white|ecru|cr
 function chainQuery(req) {
   if (!req.want.kind) return req.query;
   const words = req.query.toLowerCase();
-  const gender = /\bwomen'?s?\b/.test(words) ? "women" : /\bmen'?s?\b/.test(words) ? "men" : "";
+  const gender = /\bwomen'?s?\b/.test(words) ? "women" : /\bmen'?s?\b/.test(words) ? "men" : req.want.gender === "female" ? "women" : req.want.gender === "male" ? "men" : "";
   const colours = [...new Set(words.match(COLOUR_WORDS) || [])].slice(0, 2).join(" ");
   return [gender, colours, req.want.kind].filter(Boolean).join(" ");
 }
@@ -556,7 +556,7 @@ function priceRequest(input) {
   const chains = Array.isArray(input?.chains) ? [...new Set(input.chains.filter((id) => typeof id === "string" && Object.hasOwn(CHAINS, id)))].slice(0, MAX_CHAINS) : [];
   // What the person is looking for, so offers of another type or colour can be dropped (see `relevant`).
   const w = input?.want && typeof input.want === "object" ? input.want : {};
-  const want = { name: text(w.name, 80), kind: kind(w.kind), color: HEX.test(w.color || "") ? w.color : "" };
+  const want = { name: text(w.name, 80), kind: kind(w.kind), color: HEX.test(w.color || "") ? w.color : "", gender: w.gender === "male" || w.gender === "female" ? w.gender : "" };
   // `sale`: only discounted offers (Google Shopping's on_sale filter) — for Black Friday.
   // `maxPrice`: the budget per piece from «Что подобрать?» (Google Shopping's max_price), 0 = none.
   const maxPrice = Math.max(0, Math.min(10000, int(input?.maxPrice, 0)));
@@ -567,8 +567,8 @@ const hashKey = async (prefix, value) => {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return `${prefix}${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 };
-// v5: the budget ceiling, so older answers are not reused.
-const priceKey = (req) => hashKey("prices:v5:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}|${req.sale ? "sale" : ""}|${req.maxPrice}`);
+// v6: the shopper's gender in the relevance check, so older answers are not reused.
+const priceKey = (req) => hashKey("prices:v6:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}|${req.want.gender}|${req.sale ? "sale" : ""}|${req.maxPrice}`);
 
 // "Google hasn't returned any results for this query." is an answer (nothing found), not a failure.
 const NO_RESULTS = /hasn.t returned any results|no results/i;
@@ -588,11 +588,11 @@ async function googleShopping(env, q, country, { sale = false, maxPrice = 0 } = 
 const RELEVANT_SCHEMA = { type: "OBJECT", properties: { ids: { type: "ARRAY", items: { type: "INTEGER" } } }, required: ["ids"] };
 async function relevant(env, req, offers) {
   if (!offers.length || (!req.want.name && !req.want.kind)) return offers;
-  const wanted = `${req.want.name}${req.want.kind ? ` (type: ${req.want.kind})` : ""}${req.want.color ? `, colour ${req.want.color}` : ""}; search words: ${req.query}`;
+  const wanted = `${req.want.name}${req.want.kind ? ` (type: ${req.want.kind})` : ""}${req.want.color ? `, colour ${req.want.color}` : ""}${req.want.gender ? `, for ${req.want.gender === "female" ? "a woman" : "a man"}` : ""}; search words: ${req.query}`;
   const titles = offers.map((o, i) => `${i}. ${o.title}`).join("\n");
   try {
     const verdict = await askJson(env, `A shopper wants to buy this piece of clothing: ${quote(wanted)}
-Below are product titles from online shops, in any language. Return "ids" of the products that ARE this piece: the same garment type (for example a blazer is a tailored jacket, not a coat, shirt, trousers or a full suit set), for the same gender when the search says men or women, adult sizes (no kids or baby items), and the same or a close colour. Leave out everything else, including accessories, multipacks, costumes and spare parts.
+Below are product titles from online shops, in any language. Return "ids" of the products that ARE this piece: the same garment type (for example a blazer is a tailored jacket, not a coat, shirt, trousers or a full suit set), for the same gender as the shopper (drop "women's" items for a man and men's items for a woman; unisex is fine), adult sizes (no kids or baby items), and the same or a close colour. Leave out everything else, including accessories, multipacks, costumes and spare parts.
 ${quote(`\n${titles}\n`)}`, RELEVANT_SCHEMA, { temperature: 0 });
     const keep = new Set((Array.isArray(verdict.ids) ? verdict.ids : []).filter(Number.isInteger));
     return offers.filter((_, i) => keep.has(i));
@@ -644,10 +644,11 @@ function shopUrl(value) {
     return /(^|\.)google\.[a-z.]+$/i.test(url.hostname) ? "" : link;
   } catch { return ""; }
 }
+// Google writes one shop many ways ("Zalando", "nl.zalando.be", "zalando.be en"), so one name inside the other counts.
 const sameStore = (a, b) => {
   const s = (v) => String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
   const x = s(a); const y = s(b);
-  return Boolean(x && y) && (x.startsWith(y) || y.startsWith(x));
+  return x.length >= 2 && y.length >= 2 && (x.includes(y) || y.includes(x));
 };
 
 // The search key is paid per query, so only clothing searches go through.
@@ -879,13 +880,14 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
       const token = typeof input?.token === "string" && TOKEN.test(input.token) ? input.token : "";
       if (!token) throw new TaskError(400, "token is required");
       const store = text(input.store, 60);
+      const chain = typeof input.chain === "string" && Object.hasOwn(CHAINS, input.chain) ? CHAINS[input.chain] : null;
       const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
       url.search = new URLSearchParams({ engine: "google_immersive_product", page_token: token, api_key: env.SERPAPI_KEY }).toString();
       const response = await fetch(url.toString());
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.error) throw new TaskError(502, `Магазин не ответил${data.error ? `: ${text(data.error, 120)}` : ""}. Попробуй позже.`);
       const stores = (Array.isArray(data.product_results?.stores) ? data.product_results.stores : []).filter((s) => shopUrl(s?.link));
-      const pick = stores.find((s) => sameStore(s.name, store)) || (store ? null : stores[0]);
+      const pick = stores.find((s) => chain?.match.test(String(s.name || "")) || sameStore(s.name, store)) || (store ? null : stores[0]);
       if (!pick) throw new TaskError(404, "Магазин не дал прямую ссылку на эту вещь.", "no_link");
       const result = { link: shopUrl(pick.link), store: text(pick.name, 60), price: money2(pick.extracted_price), oldPrice: money2(pick.extracted_original_price) };
       try { await env.USAGE.put(await hashKey("offer:v1:", `${token}|${store}`), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 * 7 }); }

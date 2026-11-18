@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contrastLevel, describeColor, hexToLab, paletteFit, paletteLab, pickBest, scoreOutfit, toneOf } from "../src/lib/colors.js";
+import { colorNameEn, contrastLevel, describeColor, hexToLab, paletteFit, paletteLab, pickBest, scoreOutfit, toneOf } from "../src/lib/colors.js";
 
 const softAutumn = paletteLab({
   best: [{ name: "Тауп", hex: "#8B7D6B" }, { name: "Кэмел", hex: "#B08D57" }, { name: "Олива", hex: "#6F6B3E" }, { name: "Терракота", hex: "#B5735A" }],
@@ -45,6 +45,15 @@ describe("colour maths", () => {
     expect(calm.notes).toContain("palette colour near the face");
     expect(blackTop.notes).toContain("avoid-colour near the face");
     expect(calm.score).toBeGreaterThan(blackTop.score);
+  });
+
+  it("names colours in the English words shops use", () => {
+    expect(colorNameEn("#1f2a44")).toBe("navy");
+    expect(colorNameEn("#2b3a55")).toBe("navy");
+    expect(colorNameEn("#f4f1ea")).toBe("white");
+    expect(colorNameEn("#6f6b3e")).toBe("olive");
+    expect(colorNameEn("#b08d57")).toBe("camel");
+    expect(colorNameEn("oops")).toBe("");
   });
 
   it("keeps the best outfits and drops repeats", () => {

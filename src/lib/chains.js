@@ -5,6 +5,7 @@
 // Search pages were opened by hand for Belgium (H&M, Zara, Uniqlo, Mango, Foot Locker). Other
 // countries use the same pattern where the chain sells online; anything else falls back to a Google
 // search inside the chain's site. New Yorker has no search link, so it always uses that fallback.
+import { colorNameEn } from "./colors.js";
 import { kindOf } from "./kinds.js";
 
 const q = encodeURIComponent;
@@ -94,6 +95,18 @@ export function searchChains(gap) {
 
 export const chainOf = (store) => CHAINS.find((c) => c.match.test(String(store || "").trim())) || null;
 
+// The search text for shops, always in English: the stylist's English query, or — when a piece only has a
+// Russian name (older links, a piece from the wardrobe) — gender + colour + type built on the phone
+// ("men blue jeans"). The gender word is added when the query lacks it.
+const CYRILLIC = /[а-яё]/i;
+export function shopQueryFor(gap, gender = "") {
+  const g = gender === "female" ? "women" : gender === "male" ? "men" : "";
+  const q = String(gap?.query || "").trim();
+  if (q && !CYRILLIC.test(q)) return !g || /\b(men|women)'?s?\b/i.test(q) ? q : `${g} ${q}`;
+  const kind = kindOf(gap || {});
+  return [g, colorNameEn(gap?.color), kind && !CYRILLIC.test(kind) ? kind : "clothing"].filter(Boolean).join(" ");
+}
+
 // Store search engines want the garment, not "men" or a size: "men charcoal wide leg trousers" → "charcoal wide leg trousers".
 export function shopQuery(text) {
   return String(text || "")
@@ -163,9 +176,19 @@ export function chainOffers(offers, { perChain = 2, max = 10 } = {}) {
 
 // Where an offer goes when the shop's exact page is unknown: the chain's search for this product
 // name, or a Google search for the name and the shop.
+// Article numbers ("TB7127-17835-0005") are dropped: a shop search for them finds nothing useful.
+// The gender in the product name ("Women's") wins over the person's.
 export function offerFallback(offer, country, gender = "") {
-  const title = String(offer?.title || "").split(/\s+[|–—]\s+|\s+-\s+(?=[^-]*$)/)[0].slice(0, 80).trim();
+  const raw = String(offer?.title || "");
+  const title = raw.split(/\s+[|–—]\s+|\s+-\s+(?=[^-]*$)/)[0]
+    .replace(/\b[a-z0-9]*\d[a-z0-9]*(?:-[a-z0-9]+)+\b/gi, " ") // TB7127-17835-0005
+    .replace(/\b[a-z]{1,4}\d{3,}[a-z0-9]*\b/gi, " ") // TB7127, SKU123
+    .replace(/['’]/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 80)
+    .trim();
+  const g = queryGender(raw, gender);
   const chain = chainOf(offer?.store);
-  if (chain) return chainSearch(chain, country, shopQuery(title) || title, gender);
+  if (chain) return chainSearch(chain, country, shopQuery(title) || title, g);
   return `https://www.google.com/search?q=${q(`${title} ${offer?.store || ""}`.trim())}&gl=${country}`;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQuery, zalandoSearch } from "../src/lib/chains.js";
+import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQuery, shopQueryFor, zalandoSearch } from "../src/lib/chains.js";
 
 const offer = (store, total, extra = {}) => ({ id: `${store}-${total}`, store, title: `Item ${total}`, total, price: total, condition: "new", ...extra });
 
@@ -78,6 +78,21 @@ describe("popular chains", () => {
     expect(zalandoSearch("de", "grey hoodie", { gender: "male", size: { system: "letter", pick: "L" } }))
       .toBe("https://www.zalando.de/herren/?q=grey+hoodie&sizes=L&order=price&dir=asc");
     expect(zalandoSearch("pl", "jeans")).toBe(null); // no Zalando link pattern for this country yet
+  });
+
+  it("always talks to shops in English, with the person's gender", () => {
+    expect(shopQueryFor({ query: "navy wool blazer", kind: "blazer" }, "male")).toBe("men navy wool blazer");
+    expect(shopQueryFor({ query: "women black boots" }, "female")).toBe("women black boots");
+    // a Russian name only (older links, a piece from the wardrobe): built from colour and type
+    expect(shopQueryFor({ item: "Синие джинсы", query: "Синие джинсы", kind: "jeans", color: "#2f5da8" }, "male")).toBe("men blue jeans");
+    expect(shopQueryFor({ item: "Тёмно-синяя куртка", kind: "jacket", color: "#1f2a44" }, "")).toBe("navy jacket");
+  });
+
+  it("drops article numbers from the fallback search and keeps the gender of the product", () => {
+    const link = offerFallback({ store: "Zalando", title: "Urban Classics 90's jeans Women's TB7127-17835-0005" }, "be", "male");
+    expect(link).toContain("/dames/");
+    expect(link).toContain("q=Urban+Classics+90s+jeans");
+    expect(link).not.toContain("TB7127");
   });
 
   it("falls back to the chain's search for the product name", () => {

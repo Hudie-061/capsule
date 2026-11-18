@@ -441,6 +441,12 @@ describe("price search", () => {
     expect(empty.offers).toEqual([]);
   });
 
+  it("checks the shopper's gender: a man is not shown women's items", async () => {
+    await search({ query: "jeans", country: "be", chains: ["zalando"], want: { name: "Джинсы", kind: "jeans", gender: "male" } }, env({ SERPAPI_KEY: "k" }));
+    expect(new URL(upstream.find((c) => c.serp).url).searchParams.get("q")).toBe("Zalando men jeans");
+    expect(upstream.find((c) => c.prompt?.includes("A shopper wants"))?.prompt).toContain("for a man");
+  });
+
   it("uses the budget as a price ceiling in the search", async () => {
     await search({ query: "men dark jeans", country: "be", maxPrice: 50, chains: ["zalando"], want: { name: "Джинсы", kind: "jeans" } }, env({ SERPAPI_KEY: "k" }));
     expect(upstream.filter((c) => c.serp).every((c) => new URL(c.url).searchParams.get("max_price") === "50")).toBe(true);
@@ -485,6 +491,12 @@ describe("shop link for an offer", () => {
     expect(again.cached).toBe(true);
     expect(upstream.filter((c) => c.serp)).toHaveLength(1);
     expect([...e.USAGE.map.keys()].filter((k) => !k.startsWith("offer:")).map((k) => e.USAGE.map.get(k))).toEqual(counters);
+  });
+
+  it("finds the shop however Google writes its name (nl.zalando.be for Zalando)", async () => {
+    serp = { product_results: { stores: [{ name: "Other shop", link: "https://other.example/x" }, { name: "nl.zalando.be", link: "https://www.zalando.be/urban-classics-jeans.html", extracted_price: 27.99 }] } };
+    const out = await (await open({ token: "eyJlaSI6InRva2VuLWIifQ==", store: "Zalando", chain: "zalando" }, env({ SERPAPI_KEY: "k" }))).json();
+    expect(out.link).toBe("https://www.zalando.be/urban-classics-jeans.html");
   });
 
   it("does not send a link to another shop, and rejects bad tokens without a paid call", async () => {

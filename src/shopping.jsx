@@ -11,7 +11,7 @@
 // 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
 //    profile's height and weight) is added to the search; the chip turns it off.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, zalandoSearch } from "./lib/chains.js";
+import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor, zalandoSearch } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, getPalette, inMonth, saveGapsCache } from "./lib/daily.js";
@@ -214,7 +214,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize, chosen: chosenSizes, gender: fit.gender }) : null;
   const options = system ? sizeOptions(system, sizeGender) : null;
   const pick = system ? sizePick(system, size) : null;
-  const baseQuery = gap ? gap.query || gap.item : "";
+  // English only towards shops (the interface stays Russian); the person's gender is part of the query.
+  const personGender = fit.body?.gender || fit.gender || "";
+  const baseQuery = gap ? shopQueryFor(gap, personGender) : "";
   // «Популярные» searches each chain without the size: in Google Shopping "size 50" pulls in second-hand
   // listings that mention the size, and the chains show every size on the product page anyway.
   // «Все новые» and «Б/у» search all shops once, with the size when the chip is on.
@@ -224,22 +226,26 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const shownQuery = sized ? `${baseQuery} ${size.shown}` : baseQuery; // to the user and shop links
   const place = countryById(country);
   const currency = offers.data?.currency || place.currency;
-  const gender = queryGender(baseQuery, fit.body?.gender);
+  const gender = queryGender(baseQuery, personGender);
 
-  // Offers for the selected piece in the selected country. «Популярные» spends one search per chain
-  // (cached for a day); the search in all shops runs only when «Все новые» or «Б/у» is opened.
+  // Offers for the selected piece in the selected country. A paid search runs only when the person taps
+  // «Сравнить цены» (one search per shop, so tapping through the cards no longer spends the budget);
+  // an answer from the last day is shown right away, and the filtered Zalando link is always there.
+  const searchKey = gap && country ? offersKey(country, mode, query, saleOnly) + (wishes.budget ? `:max${wishes.budget}` : "") : "";
+  const [askedKey, setAskedKey] = useState("");
   useEffect(() => {
     if (!query || !country || !setupReady || !gap) return undefined;
     let alive = true;
-    const key = offersKey(country, mode, query, saleOnly) + (wishes.budget ? `:max${wishes.budget}` : "");
+    const key = searchKey;
     (async () => {
       const saved = await kv.get(key, null);
       if (!alive) return;
       if (saved && Date.now() - Date.parse(saved.at) < DAY) { setOffers({ status: "done", data: saved, error: "" }); return; }
       if (pricesOff) { setOffers({ status: "off", data: null, error: "" }); return; }
+      if (askedKey !== key) { setOffers({ status: "idle", data: null, error: "" }); return; }
       setOffers({ status: "loading", data: null, error: "" });
       try {
-        const want = { name: gap.item, kind: kindOf(gap), color: gap.color };
+        const want = { name: gap.item, kind: kindOf(gap), color: gap.color, gender: personGender };
         const data = await pricesTask({ query, country, want, sale: saleOnly, maxPrice: wishes.budget || 0, chains: mode === "chains" ? searchChains(gap) : [] });
         if (!alive) return;
         await kv.set(key, data);
@@ -252,7 +258,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, mode, country, setupReady, pricesOff, saleOnly, wishes.budget]);
+  }, [searchKey, askedKey, setupReady, pricesOff]);
 
   const list = useMemo(() => {
     const all = offers.data?.offers || [];
@@ -288,7 +294,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     setOpening(id);
     setBlocked("");
     let link = "";
-    try { link = (await offerLinkTask({ token: offer.token, store: offer.store })).link || ""; } catch { /* the chain's search instead */ }
+    try { link = (await offerLinkTask({ token: offer.token, store: offer.store, chain: offer.chain || "" })).link || ""; } catch { /* the chain's search instead */ }
     const target = link || offerFallback(offer, country || "be", gender);
     setDirect((d) => ({ ...d, [id]: target }));
     setOpening("");
@@ -450,6 +456,15 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             </a>
           )}
 
+          {offers.status === "idle" && (
+            <div className="price-cta">
+              <button type="button" className="btn btn--dark btn--block" onClick={() => setAskedKey(searchKey)}>
+                <Icon name="bag" size={18} width={2} /> {mode === "chains" ? `Сравнить цены в ${searchChains(gap).length} магазинах` : "Найти цены во всех магазинах"}
+              </button>
+              <span className="tiny-text">{mode === "chains" ? `${searchChains(gap).length} поисков` : "1 поиск"} из общего лимита · ответ хранится сутки · ссылка Zalando выше — бесплатно</span>
+            </div>
+          )}
+
           {offers.status === "loading" && (
             <div className="offer-list">{[0, 1, 2].map((i) => <span key={i} className="offer offer--skeleton shimmer" />)}</div>
           )}
@@ -501,9 +516,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
           {offers.status === "error" && <p className="error-text">{offers.error}</p>}
 
-          {(offers.status === "off" || offers.status === "error" || offers.status === "done") && (
+          {(offers.status === "off" || offers.status === "error" || offers.status === "done" || offers.status === "idle") && (
             <>
-              {(offers.status !== "done" || !list.length) && (
+              {(offers.status === "off" || offers.status === "error" || (offers.status === "done" && !list.length)) && (
                 <div className="offer-list">
                   {links.map((s, i) => (
                     <a key={s.id} className={`offer offer--link rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
@@ -517,14 +532,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                   ))}
                 </div>
               )}
-              {offers.status === "done" && list.length > 0 && links.length > 0 && (
+              {((offers.status === "done" && list.length > 0) || offers.status === "idle") && links.length > 0 && (
                 <div className="more-links">
                   <span className="tiny-text">{filter === "used" ? "Поискать ещё:" : "Искать на сайтах:"}</span>
                   {links.map((s) => <a key={s.id} className="filter-pill" href={s.href} target="_blank" rel="noopener noreferrer">{s.name}</a>)}
                 </div>
               )}
               <p className="tiny-text center-text">
-                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · до 2 вещей из магазина" : ""}${saleOnly ? " · только скидки" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
+                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" || offers.status === "idle" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · до 2 вещей из магазина" : ""}${saleOnly ? " · только скидки" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
               </p>
             </>
           )}

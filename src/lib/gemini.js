@@ -106,8 +106,9 @@ export async function pricesTask({ query, country, chains = [], want = null, sal
 }
 
 // The product page on the shop's own site for one price offer (one search; the Worker caches it for a week).
-export async function offerLinkTask({ token, store }) {
-  return task("offer", { token, store });
+// `chain`: the shop id from the price search, so the Worker finds that shop under any name Google uses.
+export async function offerLinkTask({ token, store, chain = "" }) {
+  return task("offer", { token, store, chain });
 }
 
 // `calibrated`: the selfie was white-balanced on the phone with a white sheet of paper.

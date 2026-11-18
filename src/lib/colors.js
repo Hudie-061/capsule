@@ -131,6 +131,21 @@ export function scoreOutfit(pieces, { pal = null, contrast = "" } = {}) {
   return { score: Math.round(clamp(score, 0, 100)), notes };
 }
 
+// The English word shops use for a colour, by the nearest of these in Lab. Everything sent to shops and
+// to the price search is English (the owner's rule, 18.11.2026): the interface is Russian, the shops are not.
+const COLOR_WORDS = [
+  ["black", "#111111"], ["white", "#F7F7F5"], ["cream", "#EFE6D2"], ["beige", "#D8C3A5"], ["camel", "#B08D57"], ["brown", "#6B4423"],
+  ["light grey", "#C8C8C8"], ["grey", "#8A8A8A"], ["charcoal", "#3C3C3C"], ["navy", "#1F2A44"], ["blue", "#2F5DA8"], ["light blue", "#9CC3E6"],
+  ["olive", "#6F6B3E"], ["khaki", "#A69B6B"], ["green", "#2E7D4F"], ["burgundy", "#6E1A2E"], ["red", "#C8102E"], ["pink", "#E58FB0"],
+  ["purple", "#6B4A8E"], ["yellow", "#F2C94C"], ["orange", "#E8742A"],
+].map(([name, hex]) => ({ name, lab: hexToLab(hex) }));
+
+export function colorNameEn(hex) {
+  const c = hexToLab(hex);
+  if (!c) return "";
+  return COLOR_WORDS.reduce((best, x) => { const d = deltaE(c, x.lab); return d < best.d ? { d, name: x.name } : best; }, { d: Infinity, name: "" }).name;
+}
+
 // Keep the best `count` outfits, but never two with the same pieces.
 export function pickBest(outfits, count) {
   const seen = new Set();
