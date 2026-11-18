@@ -32,6 +32,11 @@ export async function getSettings() {
     saleOnly: saved.saleOnly === true,
     // Sizes picked in «Покупки», one per size system (see sizeSystem in sizes.js).
     chosenSizes: saved.chosenSizes && typeof saved.chosenSizes === "object" ? saved.chosenSizes : {},
+    // «Чего не хватает»: what the person asked for last time (refresh sheet), what was already shown
+    // (for variety) and what they closed with ×.
+    gapWishes: { categories: [], budget: 50, style: "", note: "", ...(saved.gapWishes && typeof saved.gapWishes === "object" ? saved.gapWishes : {}) },
+    gapsSeen: Array.isArray(saved.gapsSeen) ? saved.gapsSeen : [],
+    gapsDismissed: Array.isArray(saved.gapsDismissed) ? saved.gapsDismissed : [],
   };
 }
 

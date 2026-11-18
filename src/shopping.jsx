@@ -10,8 +10,8 @@
 // 3. «Купил здесь» records a purchase; the saving vs the most expensive offer adds up for the month.
 // 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
 //    profile's height and weight) is added to the search; the chip turns it off.
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder } from "./lib/chains.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, zalandoSearch } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, getPalette, inMonth, saveGapsCache } from "./lib/daily.js";
@@ -23,6 +23,11 @@ import { plural } from "./lib/plural.js";
 import { addPurchase, getFeedback, getLearned, getProfile, getPurchases, getSettings, saveSettings } from "./lib/settings.js";
 import { findGaps } from "./lib/stylist.js";
 import { GarmentIcon, Icon, Sheet, Spinner, isDressItem } from "./ui.jsx";
+
+// The refresh sheet: what to look for, the budget per piece and the mood. Ids match the Worker.
+const WISH_CATEGORIES = [["jeans", "Джинсы"], ["trousers", "Брюки"], ["tees", "Футболки"], ["shirts", "Рубашки"], ["knit", "Свитеры и худи"], ["blazers", "Пиджаки"], ["outer", "Куртки и пальто"], ["shoes", "Обувь"], ["accessories", "Аксессуары"]];
+const BUDGETS = [30, 50, 100, 0];
+const MOODS = [["basic", "Базовое, ко всему"], ["statement", "Что-то интереснее"], ["", "Как решит стилист"]];
 
 const FILTERS = [{ id: "chains", label: "Популярные" }, { id: "new", label: "Все новые" }, { id: "used", label: "Б/у" }];
 const PRIORITY = { high: "в первую очередь", medium: "желательно", low: "по желанию" };
@@ -73,6 +78,11 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [fit, setFit] = useState({ body: null, oversize: false, gender: "" });
   const [chosenSizes, setChosenSizes] = useState({});
   const [sizeOpen, setSizeOpen] = useState(false);
+  const [wishes, setWishes] = useState({ categories: [], budget: 50, style: "", note: "" });
+  const [wishOpen, setWishOpen] = useState(false);
+  const [dismissed, setDismissed] = useState([]);
+  const rowRef = useRef(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
   const [sizeOn, setSizeOn] = useState(true);
   const [saleOnly, setSaleOnly] = useState(false); // Black Friday: only discounted offers
   const [direct, setDirect] = useState({}); // offer id → the product page on the shop's site
@@ -80,23 +90,70 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [blocked, setBlocked] = useState("");
 
   useEffect(() => {
-    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); setSaleOnly(s.saleOnly); setChosenSizes(s.chosenSizes); });
+    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); setSaleOnly(s.saleOnly); setChosenSizes(s.chosenSizes); setWishes(s.gapWishes); setDismissed(s.gapsDismissed); });
     getPurchases().then(setPurchases);
     Promise.all([getBody(), getProfile()]).then(([body, profile]) => setFit({ body: bodyOrProfile(body, profile), oversize: splitList(profile.fits).includes("Оверсайз"), gender: profile.gender || "" }));
   }, []);
 
-  const load = useCallback(async () => {
+  // What the stylist knows beyond the wardrobe: the wishes from the refresh sheet, what it suggested
+  // before (so a refresh brings new pieces), what was closed with × and what was bought.
+  const load = useCallback(async (w = wishes) => {
     setBusy(true); setError("");
     try {
-      const result = await findGaps({ items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: (await getPalette())?.result || null });
+      const settings = await getSettings();
+      const result = await findGaps({
+        items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: (await getPalette())?.result || null,
+        wishes: w, shown: settings.gapsSeen.slice(0, 18), dismissed: settings.gapsDismissed.slice(0, 30),
+        bought: (await getPurchases()).map((p) => p.gap).filter(Boolean).slice(-10),
+      });
       setCache(await saveGapsCache(result, items.length));
       setSelected(0);
+      const nextSeen = [...new Set([...(result.items || []).map((g) => g.item), ...settings.gapsSeen])].slice(0, 24);
+      await saveSettings({ gapsSeen: nextSeen });
     } catch (e) {
       setError(e instanceof SetupError ? "setup" : e.message);
     } finally {
       setBusy(false);
     }
-  }, [items]);
+  }, [items, wishes]);
+
+  const runWishes = async (w) => {
+    setWishOpen(false);
+    setWishes(w);
+    await saveSettings({ gapWishes: w });
+    load(w);
+  };
+
+  // × on a card: never suggest this piece again.
+  const dismiss = async (g) => {
+    const next = [g.item, ...dismissed.filter((x) => x !== g.item)].slice(0, 30);
+    setDismissed(next);
+    await saveSettings({ gapsDismissed: next });
+    if (cache?.result?.items) {
+      setCache(await saveGapsCache({ ...cache.result, items: cache.result.items.filter((x) => x.item !== g.item) }, cache.itemCount));
+      setSelected(0);
+    }
+  };
+
+  // On a computer the row of cards scrolls with the mouse wheel and the arrows.
+  const updateEdges = () => {
+    const el = rowRef.current;
+    if (el) setEdges({ left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 });
+  };
+  const scrollGaps = (dir) => rowRef.current?.scrollBy({ left: dir * rowRef.current.clientWidth * 0.8, behavior: "smooth" });
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el) return undefined;
+    updateEdges();
+    const onWheel = (e) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || el.scrollWidth <= el.clientWidth) return;
+      const before = el.scrollLeft;
+      el.scrollLeft += e.deltaY;
+      if (el.scrollLeft !== before) e.preventDefault(); // at the ends the page scrolls as usual
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  });
 
   useEffect(() => {
     let alive = true;
@@ -139,7 +196,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   useEffect(() => {
     if (!query || !country || !setupReady || !gap) return undefined;
     let alive = true;
-    const key = offersKey(country, mode, query, saleOnly);
+    const key = offersKey(country, mode, query, saleOnly) + (wishes.budget ? `:max${wishes.budget}` : "");
     (async () => {
       const saved = await kv.get(key, null);
       if (!alive) return;
@@ -148,7 +205,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       setOffers({ status: "loading", data: null, error: "" });
       try {
         const want = { name: gap.item, kind: kindOf(gap), color: gap.color };
-        const data = await pricesTask({ query, country, want, sale: saleOnly, chains: mode === "chains" ? searchChains(gap) : [] });
+        const data = await pricesTask({ query, country, want, sale: saleOnly, maxPrice: wishes.budget || 0, chains: mode === "chains" ? searchChains(gap) : [] });
         if (!alive) return;
         await kv.set(key, data);
         setOffers({ status: "done", data, error: "" });
@@ -160,7 +217,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, mode, country, setupReady, pricesOff, saleOnly]);
+  }, [query, mode, country, setupReady, pricesOff, saleOnly, wishes.budget]);
 
   const list = useMemo(() => {
     const all = offers.data?.offers || [];
@@ -236,11 +293,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   };
 
   // Free links: search on the chains' own sites (or second-hand sites for «Б/у»), plus Google Shopping.
+  // Zalando's link carries the filters: the person's size, cheapest first, sale only and the budget.
   const linkCountry = country || "be";
+  const linkFilters = { size: system && pick != null ? { system, pick } : null, sale: saleOnly, budget: wishes.budget || 0 };
+  const zalando = gap ? zalandoSearch(linkCountry, baseQuery, { gender, ...linkFilters }) : null;
   const links = filter === "used"
     ? storeLinks(linkCountry).filter((s) => s.cond === "used").map((s) => ({ ...s, href: s.url(shownQuery) }))
     : [
-      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender }).map((c) => ({ ...c, cond: "new", href: c.url, note: c.own ? "Поиск прямо на сайте магазина" : "Поиск Google по сайту магазина" })),
+      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters }).map((c) => ({ ...c, cond: "new", href: c.url, note: c.own ? "Поиск прямо на сайте магазина" : "Поиск Google по сайту магазина" })),
       ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery) })),
     ];
 
@@ -266,7 +326,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
       <div className="section-head">
         <span className="section-title">Чего не хватает капсуле</span>
-        {cache && !busy ? <button type="button" className="text-button" onClick={load} disabled={!setupReady}><Icon name="refresh" size={14} width={2} /> обновить</button> : <span className="tiny-text">по твоему гардеробу</span>}
+        {cache && !busy ? <button type="button" className="text-button" onClick={() => setWishOpen(true)} disabled={!setupReady} aria-haspopup="dialog"><Icon name="refresh" size={14} width={2} /> обновить</button> : <span className="tiny-text">по твоему гардеробу</span>}
       </div>
 
       {error === "setup" || !setupReady ? (
@@ -276,18 +336,25 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       ) : !gaps.length ? (
         <div className="info-card rise">
           <span>{items.length < 2 ? "Добавь хотя бы пару вещей — и стилист подскажет, что докупить." : error || "Нажми, чтобы стилист проверил гардероб."}</span>
-          {items.length >= 2 && <button type="button" className="btn btn--dark btn--small" onClick={load}>Проверить</button>}
+          {items.length >= 2 && <button type="button" className="btn btn--dark btn--small" onClick={() => setWishOpen(true)}>Проверить</button>}
         </div>
       ) : (
-        <div className="gap-row" role="group" aria-label="Чего не хватает">
-          {gaps.map((g, i) => (
-            <button type="button" key={`${g.item}-${i}`} className={`gap-card rise${i === selected ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.05}s` }} aria-pressed={i === selected} onClick={() => { setSelected(i); setBought(""); }}>
-              <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
-              <span className="gap-card__name">{g.item}</span>
-              <span className="gap-card__impact">{g.focus ? "из образа" : impact(g, items)}</span>
-            </button>
-          ))}
-          {busy && <span className="gap-card gap-card--busy"><Spinner label="Обновляю" /></span>}
+        <div className="gap-scroll">
+          {edges.left && <button type="button" className="gap-arrow gap-arrow--left" onClick={() => scrollGaps(-1)} aria-label="Прокрутить назад"><Icon name="back" size={16} width={2.4} /></button>}
+          <div className="gap-row" role="group" aria-label="Чего не хватает" ref={rowRef} onScroll={updateEdges}>
+            {gaps.map((g, i) => (
+              <div className="gap-slot rise" key={`${g.item}-${i}`} style={{ animationDelay: `${i * 0.05}s` }}>
+                <button type="button" className={`gap-card${i === selected ? " is-on" : ""}`} aria-pressed={i === selected} onClick={() => { setSelected(i); setBought(""); }}>
+                  <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
+                  <span className="gap-card__name">{g.item}</span>
+                  <span className="gap-card__impact">{g.focus ? "из образа" : impact(g, items)}</span>
+                </button>
+                {!g.focus && <button type="button" className="gap-card__x" onClick={() => dismiss(g)} aria-label={`Больше не предлагать: ${g.item}`} title="Больше не предлагать"><Icon name="close" size={12} width={2.6} /></button>}
+              </div>
+            ))}
+            {busy && <span className="gap-card gap-card--busy"><Spinner label="Обновляю" /></span>}
+          </div>
+          {edges.right && <button type="button" className="gap-arrow gap-arrow--right" onClick={() => scrollGaps(1)} aria-label="Прокрутить вперёд"><Icon name="chevron" size={16} width={2.4} /></button>}
         </div>
       )}
       {gap?.why && <p className="muted-text gap-why fade" key={gap.item}>{gap.why}</p>}
@@ -321,6 +388,17 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             </button>
             <span className="tiny-text">цена с доставкой</span>
           </div>
+
+          {zalando && filter !== "used" && (
+            <a className="zalando-card rise" href={zalando} target="_blank" rel="noopener noreferrer">
+              <span className="zalando-card__logo" aria-hidden="true">Z</span>
+              <span className="zalando-card__text">
+                <span className="strong-text">Открыть на Zalando — сразу отфильтровано</span>
+                <span className="tiny-text">{[size ? `твой размер ${size.value}` : "все размеры", "сначала дешёвые", saleOnly ? "только скидки" : "", wishes.budget ? `до ${money(wishes.budget, currency)}` : ""].filter(Boolean).join(" · ")}</span>
+              </span>
+              <Icon name="external" size={18} width={2} />
+            </a>
+          )}
 
           {offers.status === "loading" && (
             <div className="offer-list">{[0, 1, 2].map((i) => <span key={i} className="offer offer--skeleton shimmer" />)}</div>
@@ -403,6 +481,10 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         </>
       )}
 
+      <Sheet open={wishOpen} onClose={() => setWishOpen(false)} title="Что подобрать?" subtitle="Стилист учтёт гардероб, палитру и то, что ты уже видел или убрал ×">
+        <WishForm initial={wishes} currency={currency} onSubmit={runWishes} />
+      </Sheet>
+
       <Sheet open={sizeOpen && Boolean(options)} onClose={() => setSizeOpen(false)} title="Твой размер" subtitle={gap ? `${gap.item} · один выбор для всех таких вещей` : ""}>
         {options && (
           <div className="size-picker">
@@ -447,5 +529,37 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         </div>
       </Sheet>
     </section>
+  );
+}
+
+// The refresh sheet: a few taps that steer «Чего не хватает». Nothing chosen = the stylist decides.
+function WishForm({ initial, currency, onSubmit }) {
+  const [w, setW] = useState(initial);
+  useEffect(() => setW(initial), [initial]);
+  const toggle = (id) => setW((cur) => ({ ...cur, categories: cur.categories.includes(id) ? cur.categories.filter((x) => x !== id) : [...cur.categories, id] }));
+  return (
+    <div className="wish-form">
+      <span className="section-label">Что хочешь докупить</span>
+      <div className="chip-row">
+        {WISH_CATEGORIES.map(([id, label]) => {
+          const on = w.categories.includes(id);
+          return <button type="button" key={id} className={`chip${on ? " is-on" : ""}`} aria-pressed={on} onClick={() => toggle(id)}>{on && <Icon name="check" size={14} width={2.6} />}{label}</button>;
+        })}
+      </div>
+      <span className="tiny-text">{w.categories.length ? "Подберу только из этого" : "Ничего не выбрано — стилист решит сам"}</span>
+      <span className="section-label">Бюджет на одну вещь</span>
+      <div className="chip-row">
+        {BUDGETS.map((b) => <button type="button" key={b} className={`chip${w.budget === b ? " is-on" : ""}`} aria-pressed={w.budget === b} onClick={() => setW((cur) => ({ ...cur, budget: b }))}>{b ? `до ${money(b, currency)}` : "Не важно"}</button>)}
+      </div>
+      <span className="section-label">Настроение</span>
+      <div className="chip-row">
+        {MOODS.map(([id, label]) => <button type="button" key={id || "any"} className={`chip${w.style === id ? " is-on" : ""}`} aria-pressed={w.style === id} onClick={() => setW((cur) => ({ ...cur, style: id }))}>{label}</button>)}
+      </div>
+      <label className="field-v2 wish-form__note">
+        <span>Своими словами <small>необязательно</small></span>
+        <input value={w.note} maxLength={120} placeholder="например: для офиса, без ярких цветов" onChange={(e) => { const note = e.target.value; setW((cur) => ({ ...cur, note })); }} />
+      </label>
+      <button type="button" className="btn btn--dark btn--block btn--tall" onClick={() => onSubmit(w)}><Icon name="refresh" size={18} width={2.2} /> Подобрать</button>
+    </div>
   );
 }

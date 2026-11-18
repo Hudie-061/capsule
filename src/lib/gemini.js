@@ -87,8 +87,10 @@ export async function planTask({ items, profile, feedback, learned, occasion, co
   return task("plan", { wardrobe: items.map(plainItem), profile, feedback, learned, occasion, count });
 }
 
-export async function gapsTask({ items, profile, feedback, learned }) {
-  return task("gaps", { wardrobe: items.map(plainItem), profile, feedback, learned });
+// wishes: { categories, budget, style, note } from the refresh sheet; shown / dismissed / bought: names
+// of pieces suggested before, closed with ×, and bought, so the next suggestions are different.
+export async function gapsTask({ items, profile, feedback, learned, wishes = null, shown = [], dismissed = [], bought = [] }) {
+  return task("gaps", { wardrobe: items.map(plainItem), profile, feedback, learned, wishes, shown, dismissed, bought });
 }
 
 export async function learnTask({ comment, outfitItems, liked, rules }) {
@@ -98,8 +100,8 @@ export async function learnTask({ comment, outfitItems, liked, rules }) {
 // Price search (Google Shopping via the Worker). Throws with code "prices_not_configured" until the owner adds a key.
 // `chains`: popular chains to search one by one (one paid search each); `want`: the piece, so the Worker
 // can drop offers of another type or colour; `sale`: only discounted offers (Black Friday).
-export async function pricesTask({ query, country, chains = [], want = null, sale = false }) {
-  return task("prices", { query, country, chains, want, sale });
+export async function pricesTask({ query, country, chains = [], want = null, sale = false, maxPrice = 0 }) {
+  return task("prices", { query, country, chains, want, sale, maxPrice });
 }
 
 // The product page on the shop's own site for one price offer (one search; the Worker caches it for a week).

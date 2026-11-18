@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQuery } from "../src/lib/chains.js";
+import { chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQuery, zalandoSearch } from "../src/lib/chains.js";
 
 const offer = (store, total, extra = {}) => ({ id: `${store}-${total}`, store, title: `Item ${total}`, total, price: total, condition: "new", ...extra });
 
@@ -47,7 +47,7 @@ describe("popular chains", () => {
     expect(searchChains({ part: "upperbody", kind: "t-shirt" })).toEqual(["zalando", "uniqlo", "hm", "zara"]);
     expect(searchChains({ part: "wholebody_up", kind: "blazer" })).toEqual(["zalando", "zara", "hm", "mango"]);
     expect(chainOf("nl.zalando.be")?.id).toBe("zalando");
-    expect(chainLinks("be", "men navy blazer").find((l) => l.id === "zalando").url).toBe("https://www.zalando.be/catalogus/?q=navy%20blazer");
+    expect(chainLinks("be", "men navy blazer").find((l) => l.id === "zalando").url).toBe("https://www.zalando.be/heren/?q=navy+blazer&order=price&dir=asc");
   });
 
   it("puts Zalando first, then discounted offers, then the cheapest (Black Friday)", () => {
@@ -59,9 +59,20 @@ describe("popular chains", () => {
     expect(chainLinks("be", "white sneakers", { shoes: true }).map((l) => l.id).slice(0, 2)).toEqual(["zalando", "footlocker"]);
   });
 
+  it("opens Zalando already filtered: the person's size, cheapest first, sale only and a budget", () => {
+    // checked by hand on zalando.be: sizes, length, sale, price_to, order=price&dir=asc
+    expect(zalandoSearch("be", "men black wide trousers", { size: { system: "wl", pick: { w: 33, l: 32 } } }))
+      .toBe("https://www.zalando.be/heren/?q=black+wide+trousers&sizes=33&length=32&order=price&dir=asc");
+    expect(zalandoSearch("be", "women white sneakers", { size: { system: "shoe", pick: 39.5 }, sale: true, budget: 50 }))
+      .toBe("https://www.zalando.be/dames/?q=white+sneakers&sizes=39.5&sale=true&price_to=50&order=price&dir=asc");
+    expect(zalandoSearch("de", "grey hoodie", { gender: "male", size: { system: "letter", pick: "L" } }))
+      .toBe("https://www.zalando.de/herren/?q=grey+hoodie&sizes=L&order=price&dir=asc");
+    expect(zalandoSearch("pl", "jeans")).toBe(null); // no Zalando link pattern for this country yet
+  });
+
   it("falls back to the chain's search for the product name", () => {
     expect(offerFallback({ store: "H&M", title: "Loose Fit Jeans | H&M BE" }, "be")).toBe("https://www2.hm.com/nl_be/search-results.html?q=Loose%20Fit%20Jeans");
     expect(offerFallback({ store: "About You", title: "Straight jeans" }, "nl")).toBe("https://www.google.com/search?q=Straight%20jeans%20About%20You&gl=nl");
-    expect(offerFallback({ store: "nl.zalando.be", title: "Straight jeans" }, "be")).toBe("https://www.zalando.be/catalogus/?q=Straight%20jeans");
+    expect(offerFallback({ store: "nl.zalando.be", title: "Straight jeans" }, "be")).toBe("https://www.zalando.be/catalogus/?q=Straight+jeans&order=price&dir=asc");
   });
 });

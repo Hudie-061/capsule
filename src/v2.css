@@ -328,6 +328,30 @@ button:disabled { cursor: default; }
 .gap-card--skeleton { min-height: 124px; border: 0; }
 .gap-card--busy { align-items: center; justify-content: center; min-height: 124px; }
 .gap-why { margin-top: 10px; }
+.gap-scroll { position: relative; }
+.gap-slot { position: relative; display: flex; scroll-snap-align: start; min-width: 0; }
+.gap-slot .gap-card { flex: 1; min-width: 0; }
+.gap-card__x {
+  position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%; border: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center; background: rgba(255, 253, 249, .92); color: var(--text-2);
+  box-shadow: var(--shadow-small); cursor: pointer;
+}
+.gap-arrow {
+  position: absolute; top: 50%; z-index: 2; width: 34px; height: 34px; margin-top: -14px; border-radius: 50%; border: 1px solid var(--border);
+  display: none; align-items: center; justify-content: center; background: var(--card); color: var(--dark); box-shadow: var(--shadow-small); cursor: pointer;
+}
+.gap-arrow--left { left: -12px; }
+.gap-arrow--right { right: -12px; }
+@media (hover: hover) and (pointer: fine) { .gap-arrow { display: flex; } }
+.zalando-card {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 12px 14px; border-radius: 20px; text-decoration: none; color: var(--dark);
+  background: var(--card); border: 2px solid #FF6900; box-shadow: var(--shadow-small);
+}
+.zalando-card__logo { width: 40px; height: 40px; flex-shrink: 0; border-radius: 12px; background: #FF6900; color: #fff; font-weight: 800; font-size: 20px; display: flex; align-items: center; justify-content: center; }
+.zalando-card__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wish-form { display: flex; flex-direction: column; gap: 10px; }
+.wish-form .section-label { margin-top: 6px; }
+.wish-form__note small { font-weight: 400; color: var(--text-2); }
 .my-size { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 12px; }
 .my-size__chip {
   display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 12px; border-radius: 999px;

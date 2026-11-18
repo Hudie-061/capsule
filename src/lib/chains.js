@@ -13,7 +13,31 @@ const LANG = { be: "nl", nl: "nl", fr: "fr", de: "de", lu: "fr", at: "de", es: "
 const HM = { be: "nl_be", nl: "nl_nl", fr: "fr_fr", de: "de_de", at: "de_at", es: "es_es", it: "it_it", pt: "pt_pt", pl: "pl_pl", gb: "en_gb", us: "en_us" };
 const UNIQLO = new Set(["be", "nl", "fr", "de", "es", "it", "gb", "us"]);
 const MANGO = { be: ["nl", "heren", "dames"], nl: ["nl", "heren", "dames"] };
-const ZALANDO = { be: "zalando.be/catalogus", nl: "zalando.nl/catalogus", fr: "zalando.fr/catalogue", de: "zalando.de/katalog", at: "zalando.at/katalog", gb: "zalando.co.uk/catalogue" };
+// Zalando: [domain, men, women, everyone]. Filters in the link, checked by hand on zalando.be 18.11.2026:
+// order=price&dir=asc (cheapest first), sizes=M / 33 / 52 / 42.5, length=32 (inside leg), sale=true
+// (discounted only), price_to=50. Zalando turns sizes into its own path (/heren/__maat-33/).
+const ZALANDO = {
+  be: ["zalando.be", "heren", "dames", "catalogus"], nl: ["zalando.nl", "heren", "dames", "catalogus"],
+  fr: ["zalando.fr", "homme", "femme", "catalogue"], de: ["zalando.de", "herren", "damen", "katalog"],
+  at: ["zalando.at", "herren", "damen", "katalog"], gb: ["zalando.co.uk", "men", "women", "catalogue"],
+};
+
+// The filters a shop link can carry: the size picked in «Покупки», sale only, a budget.
+// `size` is { system, pick } from sizes.js (pick: "M", 52, 42.5, or { w, l } for jeans).
+function zalandoLink(c, s, g, { size = null, sale = false, budget = 0 } = {}) {
+  const z = ZALANDO[c];
+  if (!z) return null;
+  const params = new URLSearchParams({ q: s });
+  if (size?.pick != null) {
+    if (size.system === "wl") { params.set("sizes", String(size.pick.w)); params.set("length", String(size.pick.l)); }
+    else params.set("sizes", String(size.pick));
+  }
+  if (sale) params.set("sale", "true");
+  if (budget > 0) params.set("price_to", String(budget));
+  params.set("order", "price");
+  params.set("dir", "asc");
+  return `https://www.${z[0]}/${g === "female" ? z[2] : g === "male" ? z[1] : z[3]}/?${params.toString()}`;
+}
 const FOOTLOCKER = { be: "footlocker.be/nl", nl: "footlocker.nl/nl", fr: "footlocker.fr/fr", de: "footlocker.de/de", lu: "footlocker.lu/fr", at: "footlocker.at/de", es: "footlocker.es/es", it: "footlocker.it/it", pt: "footlocker.pt/pt", ie: "footlocker.ie/en", pl: "footlocker.pl/pl", gb: "footlocker.co.uk/en", us: "footlocker.com" };
 
 // `match` is tested against the shop name Google Shopping gives (`source`).
@@ -28,8 +52,8 @@ export const CHAINS = [
   { id: "mango", name: "Mango", match: /^mango\b|mango\.com/i, site: "mango.com", own: true,
     search: (c, s, g) => (MANGO[c] ? `https://shop.mango.com/${c}/${MANGO[c][0]}/search/${g === "female" ? MANGO[c][2] : MANGO[c][1]}?q=${q(s)}` : null) },
   // Not a chain but the biggest fashion marketplace here: many brands, unusual pieces, Black Friday deals.
-  { id: "zalando", name: "Zalando", match: /zalando/i, site: "zalando.com", own: true,
-    search: (c, s) => (ZALANDO[c] ? `https://www.${ZALANDO[c]}/?q=${q(s)}` : null) },
+  { id: "zalando", name: "Zalando", match: /zalando/i, site: "zalando.com", own: true, filters: true,
+    search: zalandoLink },
   { id: "newyorker", name: "New Yorker", match: /new\s*yorker/i, site: "newyorker.de", own: true, search: () => null },
   { id: "footlocker", name: "Foot Locker", match: /foot\s*locker/i, site: "footlocker.com", own: true, shoes: true,
     search: (c, s) => (c === "us" ? `https://www.footlocker.com/search?query=${q(s)}` : FOOTLOCKER[c] ? `https://www.${FOOTLOCKER[c]}/search?query=${q(s)}` : null) },
@@ -71,20 +95,26 @@ export function queryGender(text, fallback = "") {
 
 const googleInside = (chain, country, s) => `https://www.google.com/search?q=${q(`${s} site:${chain.site}`)}&gl=${country}`;
 
-// A link that searches the chain's own site (or Google inside it) for this text.
-export function chainSearch(chain, country, s, gender = "") {
-  return chain.search?.(country, s, gender) || googleInside(chain, country, s);
+// A link that searches the chain's own site (or Google inside it) for this text. `filters` (size, sale,
+// budget) are added where the shop's link supports them (Zalando).
+export function chainSearch(chain, country, s, gender = "", filters = {}) {
+  return chain.search?.(country, s, gender, filters) || googleInside(chain, country, s);
+}
+
+// The Zalando search with the person's size, cheapest first (and sale only / budget): the «wow» link.
+export function zalandoSearch(country, query, { gender = "", size = null, sale = false, budget = 0 } = {}) {
+  return zalandoLink(country, shopQuery(query), queryGender(query, gender), { size, sale, budget });
 }
 
 // Search links for the chains that suit this piece: shoe chains only for shoes.
-export function chainLinks(country, query, { shoes = false, gender = "" } = {}) {
+export function chainLinks(country, query, { shoes = false, gender = "", filters = {} } = {}) {
   const s = shopQuery(query);
   const g = queryGender(query, gender);
   const list = CHAINS.filter((c) => c.own && (!c.shoes || shoes));
   // Zalando first (Black Friday), then shoe chains for shoes, then the rest.
   const rank = (c) => (c.id === "zalando" ? 0 : c.shoes ? 1 : 2);
   return [...list].sort((a, b) => rank(a) - rank(b)).map((c) => {
-    const own = c.search?.(country, s, g) || "";
+    const own = c.search?.(country, s, g, filters) || "";
     return { id: c.id, name: c.name, url: own || googleInside(c, country, s), own: Boolean(own) };
   });
 }

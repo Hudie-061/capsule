@@ -314,6 +314,35 @@ const STYLIST_RULES = `- Colour proportions: one dominant colour (about 60% of t
 - Texture: in tonal or neutral outfits mix a smooth fabric with a textured one so the look is not flat.
 - Wardrobe items may have "tone": the colour measured on the phone (light/medium/dark, warm/cool, neutral or accent, and whether it is in the person's palette or close to a colour to avoid near the face). Trust "tone" over your own reading of hex codes.`;
 
+// The refresh sheet in «Покупки»: categories the person wants, a budget per piece, a mood, own words.
+const WISH_CATEGORIES = {
+  jeans: "jeans", trousers: "trousers (not jeans)", tees: "t-shirts", shirts: "shirts", knit: "sweaters, cardigans or hoodies",
+  blazers: "blazers", outer: "jackets or coats", shoes: "shoes", accessories: "accessories (bags, belts, caps, scarves, jewellery)",
+};
+const names = (value, n) => (Array.isArray(value) ? value : []).slice(0, n).map((x) => text(x, 80)).filter(Boolean);
+
+function wishesText(input) {
+  const w = input?.wishes && typeof input.wishes === "object" ? input.wishes : {};
+  const categories = (Array.isArray(w.categories) ? w.categories : []).filter((id) => typeof id === "string" && Object.hasOwn(WISH_CATEGORIES, id)).map((id) => WISH_CATEGORIES[id]);
+  const budget = Math.max(0, Math.min(10000, int(w.budget, 0)));
+  const note = text(w.note, 120);
+  const shown = names(input?.shown, 18);
+  const dismissed = names(input?.dismissed, 30);
+  const bought = names(input?.bought, 10);
+  const lines = [
+    categories.length ? `- Suggest ONLY pieces of these categories: ${categories.join(", ")}.` : "- Any category; choose what the wardrobe needs most.",
+    budget
+      ? `- Budget: up to ${budget} per piece (in the person's local currency) at mass-market shops (Zalando, Zara, H&M, Uniqlo, Mango). Suggest only pieces that are usually sold at that price: cotton, denim, jersey, viscose, wool-blend; no cashmere, silk, pure wool, suede or real leather. Keep premium materials out of "query".`
+      : "- Budget: not limited, but prefer good value; no luxury pieces.",
+    w.style === "basic" ? "- Mood: versatile basics that go with almost everything." : w.style === "statement" ? "- Mood: something more interesting: a current trend piece, a statement colour from the palette or an unusual cut that still works with the wardrobe." : "",
+    note ? `- In their own words: ${quote(note)}` : "",
+    shown.length ? `- Recently suggested (give DIFFERENT pieces this time; repeat one only if it is clearly still the most needed): ${quote(shown.join("; "))}` : "",
+    dismissed.length ? `- Not interested (never suggest these or very similar pieces): ${quote(dismissed.join("; "))}` : "",
+    bought.length ? `- Bought recently (do not suggest them again): ${quote(bought.join("; "))}` : "",
+  ].filter(Boolean);
+  return `WHAT THE PERSON WANTS THIS TIME\n${lines.join("\n")}`;
+}
+
 const GAPS_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -515,21 +544,23 @@ function priceRequest(input) {
   const w = input?.want && typeof input.want === "object" ? input.want : {};
   const want = { name: text(w.name, 80), kind: kind(w.kind), color: HEX.test(w.color || "") ? w.color : "" };
   // `sale`: only discounted offers (Google Shopping's on_sale filter) — for Black Friday.
-  return { query, country, currency: COUNTRIES[country], chains, want, sale: input?.sale === true };
+  // `maxPrice`: the budget per piece from «Что подобрать?» (Google Shopping's max_price), 0 = none.
+  const maxPrice = Math.max(0, Math.min(10000, int(input?.maxPrice, 0)));
+  return { query, country, currency: COUNTRIES[country], chains, want, sale: input?.sale === true, maxPrice };
 }
 
 const hashKey = async (prefix, value) => {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return `${prefix}${[...new Uint8Array(digest)].slice(0, 12).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 };
-// v4: short chain queries and the sale filter, so older answers are not reused.
-const priceKey = (req) => hashKey("prices:v4:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}|${req.sale ? "sale" : ""}`);
+// v5: the budget ceiling, so older answers are not reused.
+const priceKey = (req) => hashKey("prices:v5:", `${req.country}|${req.query.toLowerCase()}|${req.chains.join(",")}|${req.want.name.toLowerCase()}|${req.want.kind}|${req.want.color}|${req.sale ? "sale" : ""}|${req.maxPrice}`);
 
 // "Google hasn't returned any results for this query." is an answer (nothing found), not a failure.
 const NO_RESULTS = /hasn.t returned any results|no results/i;
-async function googleShopping(env, q, country, { sale = false } = {}) {
+async function googleShopping(env, q, country, { sale = false, maxPrice = 0 } = {}) {
   const url = new URL(`${env.SERPAPI_BASE || "https://serpapi.com"}/search.json`);
-  url.search = new URLSearchParams({ engine: "google_shopping", q, gl: country, hl: "en", ...(sale ? { on_sale: "true" } : {}), api_key: env.SERPAPI_KEY }).toString();
+  url.search = new URLSearchParams({ engine: "google_shopping", q, gl: country, hl: "en", ...(sale ? { on_sale: "true" } : {}), ...(maxPrice ? { max_price: String(maxPrice) } : {}), api_key: env.SERPAPI_KEY }).toString();
   const response = await fetch(url.toString());
   const data = await response.json().catch(() => ({}));
   if (data.error && NO_RESULTS.test(String(data.error))) return [];
@@ -727,8 +758,11 @@ ${JSON.stringify(catalog(items))}
 PAST RATINGS
 ${feedbackText(fb, items)}
 
+${wishesText(input)}
+
 For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence naming which owned pieces it goes with and what it adds (and why its colour suits the person when the palette is known), "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "kind" = its exact type as one short lowercase English noun (e.g. "blazer", "shirt", "hoodie", "jeans", "boots", "bag", "chain"), "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" from the profile gender, or only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
-      const result = await askJson(env, prompt, GAPS_SCHEMA, { temperature: 0.5 });
+      // a bit more randomness than before, so «обновить» brings new pieces
+      const result = await askJson(env, prompt, GAPS_SCHEMA, { temperature: 0.8 });
       const ids = new Set(items.map((i) => i.id));
       return {
         summary: text(result.summary, 300),
@@ -791,7 +825,7 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
         const chains = req.chains.slice(0, Math.max(1, budget));
         searches = chains.length;
         const q = chainQuery(req);
-        const found = await Promise.allSettled(chains.map((id) => googleShopping(env, `${CHAINS[id].name} ${q}`, req.country, { sale: req.sale })));
+        const found = await Promise.allSettled(chains.map((id) => googleShopping(env, `${CHAINS[id].name} ${q}`, req.country, { sale: req.sale, maxPrice: req.maxPrice })));
         if (found.every((f) => f.status === "rejected")) throw found[0].reason;
         const own = found.flatMap((f, i) => (f.status === "fulfilled"
           ? normalizeOffers(f.value, { keepOrder: true })
@@ -804,9 +838,9 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
         offers = kept.filter((o) => (taken[o.chain] = (taken[o.chain] || 0) + 1) <= PER_CHAIN).sort((a, b) => a.total - b.total);
       } else {
         searches = 1;
-        offers = await relevant(env, req, normalizeOffers(await googleShopping(env, req.query, req.country, { sale: req.sale })));
+        offers = await relevant(env, req, normalizeOffers(await googleShopping(env, req.query, req.country, { sale: req.sale, maxPrice: req.maxPrice })));
       }
-      const result = { query: req.query, country: req.country, currency: req.currency, chains: req.chains, sale: req.sale, offers, searches, at: new Date().toISOString() };
+      const result = { query: req.query, country: req.country, currency: req.currency, chains: req.chains, sale: req.sale, maxPrice: req.maxPrice, offers, searches, at: new Date().toISOString() };
       try { await env.USAGE.put(await priceKey(req), JSON.stringify(result), { expirationTtl: 60 * 60 * 24 }); }
       catch (error) { console.error("capsule-proxy: price cache not saved", error?.message || error); }
       return result;

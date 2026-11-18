@@ -32,8 +32,8 @@ export async function planOutfits({ items, profile, feedback, learned = [], coun
   return pickBest(outfits, count);
 }
 
-export async function findGaps({ items, profile, feedback, learned = [], palette = null }) {
-  const result = await gapsTask({ items: withTones(items, palette ? paletteLab(palette) : null), profile, feedback: feedback.slice(-40), learned });
+export async function findGaps({ items, profile, feedback, learned = [], palette = null, wishes = null, shown = [], dismissed = [], bought = [] }) {
+  const result = await gapsTask({ items: withTones(items, palette ? paletteLab(palette) : null), profile, feedback: feedback.slice(-40), learned, wishes, shown, dismissed, bought });
   return { summary: result.summary || "", items: result.items || [] };
 }
 

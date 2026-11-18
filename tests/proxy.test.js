@@ -237,6 +237,25 @@ describe("no general-purpose access", () => {
     expect(out.items[1].color).toBe("#8a7f72");
   });
 
+  it("steers the gaps by the person's wishes, budget and what they saw, closed or bought", async () => {
+    await worker.fetch(call("/api/gaps", {
+      wardrobe,
+      wishes: { categories: ["jeans", "shoes", "spaceship"], budget: 50, style: "statement", note: "для офиса" },
+      shown: ["Тёмно-синий шерстяной блейзер"], dismissed: ["Изумрудный кашемировый джемпер"], bought: ["Белые кеды"],
+    }), env());
+    const { prompt, body } = upstream[0];
+    expect(prompt).toContain("Suggest ONLY pieces of these categories: jeans, shoes.");
+    expect(prompt).not.toContain("spaceship");
+    expect(prompt).toContain("Budget: up to 50 per piece");
+    expect(prompt).toContain("no cashmere");
+    expect(prompt).toContain("something more interesting");
+    expect(prompt).toContain("<user_data>для офиса</user_data>");
+    expect(prompt).toContain("give DIFFERENT pieces this time");
+    expect(prompt).toContain("Изумрудный кашемировый джемпер");
+    expect(prompt).toContain("Белые кеды");
+    expect(body.generationConfig.temperature).toBe(0.8);
+  });
+
   it("analyses a selfie palette with the fixed fan of the season and refuses photos without a face", async () => {
     const out = await (await worker.fetch(call("/api/palette", { image: PNG, calibrated: true }), env())).json();
     expect(upstream[0].prompt).toMatch(/ONLY to choose clothing colours/);
@@ -404,6 +423,11 @@ describe("price search", () => {
     serp = { error: "Google hasn't returned any results for this query." };
     const empty = await (await search({ query: "men purple tweed waistcoat", country: "be", want: { name: "Жилет", kind: "waistcoat" } }, env({ SERPAPI_KEY: "k" }))).json();
     expect(empty.offers).toEqual([]);
+  });
+
+  it("uses the budget as a price ceiling in the search", async () => {
+    await search({ query: "men dark jeans", country: "be", maxPrice: 50, chains: ["zalando"], want: { name: "Джинсы", kind: "jeans" } }, env({ SERPAPI_KEY: "k" }));
+    expect(upstream.filter((c) => c.serp).every((c) => new URL(c.url).searchParams.get("max_price") === "50")).toBe(true);
   });
 
   it("drops results of another type from a search in all shops", async () => {
