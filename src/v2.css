@@ -757,3 +757,65 @@ button.size-card { font: inherit; color: inherit; text-align: left; cursor: poin
 .photo-cta span:last-of-type { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .photo-cta small { color: var(--on-dark-2); font-size: 13px; line-height: 1.35; }
 .tag--photo { background: #E9EEDF; color: #33461F; }
+
+/* ---- sizes without a tape measure ------------------------------------------------------------ */
+/* «Как сел размер?» in «Покупки», a few days after «Купил здесь» */
+.fit-ask { margin-top: 12px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; padding: 14px 16px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; box-shadow: var(--shadow-small); }
+.fit-ask__title { font-family: var(--serif); font-size: 22px; line-height: 1.1; }
+.fit-ask__what { font-size: 14px; color: var(--text-2); }
+.fit-ask__what b { color: var(--dark); }
+/* size chips: one size system (src/size-chips.jsx); long lists scroll sideways */
+.size-chips { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.chip-row--scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; margin-inline: -2px; padding-inline: 2px; }
+.chip-row--scroll::-webkit-scrollbar { display: none; }
+.chip-row--scroll .chip { flex-shrink: 0; }
+/* «Какой размер обычно носишь?» at first launch */
+.usual-sizes { display: flex; flex-direction: column; gap: 16px; }
+.usual-sizes__hint { margin: -6px 0 0; font-size: 12.5px; color: var(--text-2); }
+/* size and fit in the item editor */
+.item-size { display: flex; flex-direction: column; gap: 8px; }
+.item-size__row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.item-size__row select { min-height: 40px; }
+.item-size__label { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px dashed var(--border); background: transparent; font: inherit; font-size: 13px; color: var(--dark); }
+.item-size__note { margin: 0; font-size: 12.5px; line-height: 1.4; color: var(--text-2); text-transform: none; letter-spacing: 0; }
+
+/* ---- «Снять с подсказками»: the camera takes the full-length photos (src/body-capture.jsx) ----- */
+.photo-cta--main { width: 100%; }
+.photo-upload { border-radius: 20px; border: 1px solid var(--border); background: var(--card); padding: 4px 14px; }
+.photo-upload[open] { padding-bottom: 14px; display: flex; flex-direction: column; gap: 12px; }
+.photo-upload summary { min-height: 44px; display: flex; align-items: center; font-size: 14px; font-weight: 600; cursor: pointer; }
+.capture { position: fixed; inset: 0; z-index: 120; background: #11100E; color: var(--on-dark); display: flex; flex-direction: column; padding: calc(var(--safe-t) + 10px) 14px calc(var(--safe-b) + 14px); gap: 10px; }
+.capture__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.capture__close { background: rgba(244, 239, 231, .12); color: var(--on-dark); border-color: transparent; }
+.capture__step { font-size: 14px; font-weight: 600; }
+.capture__voice { background: rgba(244, 239, 231, .12); color: var(--on-dark); border-color: transparent; }
+.capture__intro { flex: 1; overflow-y: auto; max-width: 520px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.capture__intro .pose-guide figure { background: rgba(244, 239, 231, .06); border-color: rgba(244, 239, 231, .14); }
+.capture__intro .pose-guide svg { stroke: var(--on-dark); }
+.capture__intro .pose-guide .pose-guide__floor { stroke: rgba(244, 239, 231, .25); }
+.capture__intro .pose-guide figcaption span, .capture__intro .tiny-text { color: var(--on-dark-2); }
+.capture__steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.45; color: var(--on-dark-2); }
+.capture__steps b { color: var(--on-dark); }
+.capture__stage { position: relative; flex: 1; min-height: 0; border-radius: 22px; overflow: hidden; background: #000; }
+.capture__stage.is-hidden { display: none; }
+.capture__stage video, .capture__stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.capture__stage.is-mirrored video, .capture__stage.is-mirrored canvas { transform: scaleX(-1); }
+.capture__loading { position: absolute; inset: auto 12px 12px; display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 14px; }
+.capture__count { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: var(--serif); font-size: 140px; line-height: 1; color: #fff; text-shadow: 0 6px 30px rgba(0, 0, 0, .5); animation: pop .3s var(--ease) both; }
+.capture__hint { position: absolute; left: 12px; right: 12px; top: 12px; padding: 12px 14px; border-radius: 16px; background: rgba(17, 16, 14, .78); color: #fff; font-size: 17px; font-weight: 600; line-height: 1.3; text-align: center; backdrop-filter: blur(6px); }
+.capture__hint.is-ok { background: rgba(70, 120, 50, .85); }
+.capture__actions { display: flex; gap: 10px; }
+.btn--outline-light { background: transparent; color: var(--on-dark); border-color: rgba(244, 239, 231, .45); }
+.capture__review { flex: 1; overflow-y: auto; max-width: 520px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.capture__shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.capture__shots figure { margin: 0; display: flex; flex-direction: column; gap: 6px; align-items: center; font-size: 13px; color: var(--on-dark-2); }
+.capture__shots img, .capture__shots .shimmer { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 16px; display: block; background: #000; }
+/* after the measurements: the palette from the same photo, and the try-on photo */
+.after-measure { display: flex; flex-direction: column; gap: 14px; }
+.after-measure__card { background: var(--card); border: 1px solid var(--border); border-radius: 22px; padding: 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.after-measure__face { width: 96px; height: 96px; border-radius: 50%; overflow: hidden; border: 3px solid var(--border); }
+.after-measure__face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.after-measure__season { font-family: var(--serif); font-size: 30px; line-height: 1.05; }
+.after-measure__swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+.after-measure__swatches i { width: 34px; height: 34px; border-radius: 10px; display: block; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
+.after-measure .action-row { width: 100%; }

@@ -33,6 +33,7 @@ let topicVerdict;
 let paletteIsPerson;
 let paletteSeason;
 let serp;
+let labelReply;
 const SERP = { shopping_results: [
   { title: "Dark straight jeans", source: "Zalando", product_id: "101", product_link: "https://shop.example/a", immersive_product_page_token: "eyJlaSI6InRva2VuLWEifQ==", extracted_price: 49.95, extracted_old_price: 59.95, delivery: "Free delivery", thumbnail: "https://img.example/a.jpg" },
   { title: "Levi's 501 dark", source: "Vinted", product_link: "https://www.vinted.be/items/1", extracted_price: 18, delivery: "+€3,90 delivery" },
@@ -48,6 +49,7 @@ beforeEach(() => {
   paletteIsPerson = true;
   paletteSeason = "Мягкая осень";
   serp = SERP;
+  labelReply = { isLabel: true, size: "W32 L32", brand: "Levi's" };
   vi.stubGlobal("fetch", vi.fn(async (url, init) => {
     if (String(url).includes("serpapi")) {
       upstream.push({ url: String(url), serp: true });
@@ -59,6 +61,7 @@ beforeEach(() => {
     if (url.includes("flash-image")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG.data } }] } }] }), { status: 200 });
     if (prompt.startsWith("Is the following user text") || prompt.startsWith("Is the following text a product search")) return reply({ onTopic: topicVerdict });
     if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
+    if (prompt.includes("should show the label or tag")) return reply(labelReply);
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true, tips: [{ title: "Тон в тон", why: "Оттенки синего вытягивают силуэт" }, { title: "", why: "пусто" }, { title: "a", why: "b" }, { title: "c", why: "d" }] }] });
     if (prompt.includes("recommend at most 6")) {
       return reply({ summary: "s", items: [
@@ -225,7 +228,18 @@ describe("no general-purpose access", () => {
     const out = await (await worker.fetch(call("/api/detect", { image: PNG }), env())).json();
     expect(upstream[0].prompt).toMatch(/jewellery, watches and glasses/);
     expect(upstream[0].prompt).toContain("chains, necklaces, bracelets, rings");
+    expect(upstream[0].prompt).toContain("Never guess a size");
     expect(out.items[0].kind).toBe("t-shirt");
+    expect(out.items[0].size).toBe(""); // no label in the photo → no size
+  });
+
+  it("reads the size and brand from a photo of a clothing label, and nothing from other photos", async () => {
+    const out = await (await worker.fetch(call("/api/label", { image: PNG }), env())).json();
+    expect(out).toEqual({ isLabel: true, size: "W32 L32", brand: "Levi's" });
+    expect(upstream[0].prompt).toContain("If it does not show a clothing or shoe label");
+    labelReply = { isLabel: false, size: "M", brand: "Not a label" };
+    const other = await (await worker.fetch(call("/api/label", { image: PNG }), env())).json();
+    expect(other).toEqual({ isLabel: false, size: "", brand: "" });
   });
 
   it("returns shopping gaps with a category, colour and a clean search query", async () => {

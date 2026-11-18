@@ -213,6 +213,7 @@ const DETECT_SCHEMA = {
         properties: {
           name: { type: "STRING" }, part: { type: "STRING", enum: PARTS }, kind: { type: "STRING" }, color: { type: "STRING" }, secondaryColor: { type: "STRING" },
           tags: { type: "ARRAY", items: { type: "STRING" } }, box_2d: { type: "ARRAY", items: { type: "INTEGER" } },
+          size: { type: "STRING" }, brand: { type: "STRING" },
         },
         required: ["name", "part", "kind", "color", "tags", "box_2d"],
       },
@@ -228,7 +229,18 @@ For each item return:
 - kind: the exact type as one short lowercase English noun, e.g. "t-shirt", "shirt", "hoodie", "sweater", "blazer", "jacket", "coat", "dress", "jeans", "trousers", "shorts", "skirt", "sneakers", "boots", "loafers", "bag", "backpack", "cap", "hat", "beanie", "scarf", "belt", "chain", "necklace", "bracelet", "ring", "earrings", "watch", "glasses", "sunglasses".
 - name: in Russian, always "colour + item type", 2-3 words, the colour adjective agreeing in gender and number with the noun, e.g. "Чёрный бомбер", "Синие джинсы", "Белая футболка", "Серебряная цепочка", "Коричневая сумка".
 - color: primary colour as #rrggbb; secondaryColor: a genuinely distinct second colour as #rrggbb or an empty string.
-- tags: 1-4 short lowercase details in Russian (fit, fabric, style), e.g. "оверсайз", "варёный", "бэгги".`;
+- tags: 1-4 short lowercase details in Russian (fit, fabric, style), e.g. "оверсайз", "варёный", "бэгги".
+- size: ONLY if a size label or tag of this item is clearly readable in the photo, the size printed on it, preferring the European or international size: a letter size ("M", "XL"), waist and length for jeans ("W32 L32"), or the EU number ("EU 42"). Otherwise an empty string. Never guess a size from how the item looks.
+- brand: ONLY if a label or logo of this item clearly shows the brand name, that name; otherwise an empty string.`;
+
+// A photo of a clothing label (the size tag inside a garment or a shoe tongue) → the size and the brand.
+// Only clothing and shoe labels: anything else returns isLabel = false.
+const LABEL_SCHEMA = { type: "OBJECT", properties: { isLabel: { type: "BOOLEAN" }, size: { type: "STRING" }, brand: { type: "STRING" } }, required: ["isLabel", "size", "brand"] };
+const LABEL_PROMPT = `This photo should show the label or tag of a piece of clothing or of shoes (a size tag sewn inside a garment, a hang tag, the label inside a shoe tongue).
+If it does not show a clothing or shoe label, set isLabel to false and leave size and brand empty.
+Otherwise set isLabel to true and return:
+- size: the size printed on the label, exactly one, preferring the European or international size: a letter size ("M", "XL"), waist and length for jeans and trousers ("W32 L32"; "32/32" means W32 L32), or the EU number ("EU 42", "EU 42 2/3" for shoes). If the label shows several systems (UK, US, EU, CN), give the EU or letter size. Empty if no size is printed or readable. Never guess.
+- brand: the brand name printed on the label, or an empty string.`;
 
 function garmentPrompt(m, chromaKey, direction) {
   const secondary = m.secondaryColor ? ` with distinct secondary color ${m.secondaryColor}` : "";
@@ -668,8 +680,18 @@ const TASKS = {
         color: HEX.test(i.color || "") ? i.color : "#808080", secondaryColor: HEX.test(i.secondaryColor || "") ? i.secondaryColor : "",
         tags: Array.isArray(i.tags) ? i.tags.slice(0, 4).map((t) => text(t, 30)) : [],
         box_2d: Array.isArray(i.box_2d) ? i.box_2d.slice(0, 4).map((n) => Math.max(0, Math.min(1000, Math.round(Number(n) || 0)))) : [0, 0, 1000, 1000],
+        size: text(i.size, 24), brand: text(i.brand, 40),
       }));
       return { items };
+    },
+  },
+
+  label: {
+    kind: "text",
+    async run(env, input) {
+      const result = await askJson(env, LABEL_PROMPT, LABEL_SCHEMA, { images: [image(input.image)], temperature: 0 });
+      const isLabel = result.isLabel === true;
+      return { isLabel, size: isLabel ? text(result.size, 24) : "", brand: isLabel ? text(result.brand, 40) : "" };
     },
   },
 

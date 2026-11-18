@@ -67,7 +67,7 @@ export function SizesView({ onBack, onToast }) {
   const applyPhoto = async ({ height: h, values: found }) => {
     const nextMeasured = { ...measured, ...found };
     const nextSources = { ...sources, ...Object.fromEntries(Object.keys(found).map((id) => [id, "photo"])) };
-    setHeight(h); setMeasured(nextMeasured); setSources(nextSources); setPhotoOpen(false);
+    setHeight(h); setMeasured(nextMeasured); setSources(nextSources); // the photo screen closes itself after the palette question
     await persist({ gender, height: h, weight, measured: nextMeasured, sources: nextSources });
     onToast?.("Мерки по фото сохранены — можно поправить ползунками");
   };
@@ -90,7 +90,7 @@ export function SizesView({ onBack, onToast }) {
 
       <button type="button" className="photo-cta rise" onClick={() => setPhotoOpen(true)}>
         <span className="row-card__icon"><Icon name="camera" size={22} /></span>
-        <span><b>Мерки по фото</b><small>Сфотографируйся в полный рост — посчитаю обхваты. Фото не уходит с телефона.</small></span>
+        <span><b>Мерки по фото</b><small>Можно без помощника: поставь телефон — он сам скажет, как встать. Фото не уходит с телефона.</small></span>
         <Icon name="chevron" size={20} width={2} />
       </button>
 

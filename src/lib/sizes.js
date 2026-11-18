@@ -3,6 +3,7 @@
 // (tops by chest, trousers by waist and inside leg, shirts by neck) and Mondopoint / ISO 9407
 // for shoes (foot length). Brand charts differ, so results are a starting point, not a promise.
 import { kv } from "./db.js";
+import { kindOf } from "./kinds.js";
 
 export const MEASURES = [
   { id: "chest", label: "Грудь", female: "Обхват груди", min: 70, max: 150, step: 1, how: "Лента горизонтально через самые выступающие точки груди и под лопатками." },
@@ -158,16 +159,108 @@ export function sizePick(system, size) {
   return m ? Number(m[1]) : null;
 }
 
-// The size to search for: the user's own choice for this system, or the size from measurements.
-// `suggested` is what the measurements say, shown next to a manual choice.
-export function sizeForKind(kind, body, { oversize = false, chosen = {}, gender = "" } = {}) {
+// The size to search for, most reliable first: the user's own choice for this system, then the size of
+// the clothes they already wear (`owned`, see wardrobeSizes), then the size from measurements.
+// `fallback` is what would be used without the manual choice (shown next to it), `suggested` is what
+// the measurements say.
+export function sizeForKind(kind, body, { oversize = false, chosen = {}, owned = {}, gender = "" } = {}) {
   const g = body?.gender || gender;
   const system = sizeSystem(kind, g);
   if (!system) return null;
   const measured = body?.height ? measuredSize(kind, body, { oversize }) : null;
+  const own = owned?.[system] && validChoice(system, owned[system].pick, g) ? owned[system] : null;
+  const ownSize = own ? { ...sizeOfChoice(system, own.pick), chosen: false, owned: true, ownedCount: own.count, ownedNames: own.names } : null;
   const pick = chosen?.[system];
-  if (validChoice(system, pick, g)) return { ...sizeOfChoice(system, pick), suggested: measured?.value || "" };
+  if (validChoice(system, pick, g)) {
+    const fallback = ownSize ? { value: ownSize.value, from: "owned" } : measured ? { value: measured.value, from: "measured" } : null;
+    return { ...sizeOfChoice(system, pick), suggested: measured?.value || "", fallback };
+  }
+  if (ownSize) return { ...ownSize, suggested: measured?.value || "" };
   return measured ? { ...measured, system, chosen: false } : null;
+}
+
+// ---- sizes from the clothes the person already wears ---------------------------------------------
+// The most reliable size is the one on a piece that fits: it already includes how the person likes
+// clothes to sit, and it needs no tape measure. Items keep `size` (as on the label or picked in the
+// editor) and `fit`: "small" (мала), "good" (впору), "big" (велика).
+export const FIT_OPTIONS = [["small", "Мала"], ["good", "Впору"], ["big", "Велика"]];
+
+const LETTER_RE = /(?:^|[^A-Z0-9])(XXXL|3XL|2XL|XXL|XL|2XS|XXS|XS|S|M|L)(?![A-Z0-9])/;
+const LETTER_ALIAS = { XXXL: "3XL", "2XL": "XXL", "2XS": "XS", XXS: "XS" };
+
+// A size as printed on a label ("M", "W32 L32", "32/34", "EU 42", "42 2/3", "Size: XL") in the picker's
+// terms for a size system, or null when it does not belong to that system.
+export function parseSize(text, system, gender = "") {
+  const t = ` ${String(text || "").toUpperCase().replace(/,/g, ".").replace(/½/g, ".5")} `;
+  if (!system || !t.trim()) return null;
+  const inList = (v) => (validChoice(system, v, gender) ? v : null);
+  if (system === "letter") {
+    const m = LETTER_RE.exec(t);
+    return m ? inList(LETTER_ALIAS[m[1]] || m[1]) : null;
+  }
+  if (system === "wl") {
+    const m = /W\s*(\d{2})\s*[/X×*-]?\s*L\s*(\d{2})/.exec(t) || /(?:^|\s)(\d{2})\s*[/X×]\s*(\d{2})(?:\s|$)/.exec(t);
+    return m ? inList({ w: Number(m[1]), l: nearest(Number(m[2]), L_SIZES) }) : null;
+  }
+  if (system === "w") {
+    const m = /W\s*(\d{2})/.exec(t) || /(?:^|\s)(\d{2})(?:\s|$)/.exec(t);
+    return m ? inList(Number(m[1])) : null;
+  }
+  // EU numbers: the one after "EU"/"EUR" first (labels also print UK and US sizes), else the first
+  // number that is a size in this system
+  const numbers = system === "shoe" ? /(?:^|[^\d])(\d{2})(?:\.(5)|\s*(1\/3|2\/3|1\/2))?(?![\d/])/g : /(?:^|[^\d])(\d{2})(?![\d])/g;
+  const value = (m) => Number(m[1]) + (system === "shoe" && (m[2] || m[3] === "1/2" || m[3] === "2/3") ? 0.5 : 0); // 42 ⅔ (adidas) wears like 42.5
+  const eu = /EUR?\s*[:.]?\s*(\d{2})(?:\.(5)|\s*(1\/3|2\/3|1\/2))?/.exec(t);
+  if (eu && inList(value(eu)) != null) return value(eu);
+  for (const m of t.matchAll(numbers)) if (inList(value(m)) != null) return value(m);
+  return null;
+}
+
+// One size bigger (dir 1) or smaller (dir -1) in a system; for W/L the waist changes. Shoes move by a
+// whole size. null when there is no next size.
+export function stepSize(system, pick, dir, gender = "") {
+  const o = sizeOptions(system, gender);
+  if (!o || pick == null) return null;
+  const next = (list, v, step = 1) => { const i = list.indexOf(v); const j = i + dir * step; return i < 0 || j < 0 || j >= list.length ? null : list[j]; };
+  if (system === "wl") { const w = next(o.main, pick.w); return w == null ? null : { w, l: pick.l }; }
+  if (system === "shoe") return next(o.main, pick, 2);
+  return next(o.main, pick);
+}
+
+// For jeans: longer (dir 1) or shorter (dir -1) inside leg, same waist.
+export function stepLength(pick, dir) {
+  const i = L_SIZES.indexOf(pick?.l);
+  const j = i + dir;
+  return i < 0 || j < 0 || j >= L_SIZES.length ? null : { w: pick.w, l: L_SIZES[j] };
+}
+
+// The label of a size in a system, as the pickers and the profile show it ("M", "W32 L32", "EU 42").
+export const sizeLabel = (system, pick) => (pick == null ? "" : sizeOfChoice(system, pick).value);
+
+// What the wardrobe says about the person's size, per size system: pieces marked «впору» count fully,
+// «мала» / «велика» count for the next size up / down, unmarked pieces count half (they are worn, but
+// may sit loosely). { letter: { pick: "M", count: 3, names: [...] }, wl: {...} }
+export function wardrobeSizes(items, gender = "") {
+  const votes = {};
+  for (const item of items || []) {
+    const system = item?.size ? sizeSystem(kindOf(item), gender) : null;
+    const pick = system ? parseSize(item.size, system, gender) : null;
+    if (!pick) continue;
+    const adjusted = item.fit === "small" ? stepSize(system, pick, 1, gender) : item.fit === "big" ? stepSize(system, pick, -1, gender) : pick;
+    if (adjusted == null) continue;
+    const weight = item.fit === "good" ? 1 : item.fit ? 0.75 : 0.5;
+    const key = JSON.stringify(adjusted);
+    votes[system] ??= {};
+    votes[system][key] ??= { pick: adjusted, weight: 0, names: [] };
+    votes[system][key].weight += weight;
+    votes[system][key].names.push(item.name);
+  }
+  const out = {};
+  for (const [system, options] of Object.entries(votes)) {
+    const best = Object.values(options).sort((a, b) => b.weight - a.weight)[0];
+    out[system] = { pick: best.pick, count: best.names.length, names: best.names.slice(0, 3) };
+  }
+  return out;
 }
 
 function measuredSize(kind, body, { oversize = false } = {}) {
@@ -205,10 +298,15 @@ export function bodyOrProfile(body, profile) {
 }
 
 // One line for the profile card and for the stylist ("верх M, джинсы W32 L32, обувь EU 43").
-export function sizesSummary(body) {
-  if (!body?.height) return "";
-  const s = Object.fromEntries(sizesFor(body).map((x) => [x.id, x.value]));
-  return `верх ${s.top}, джинсы ${s.jeans}, обувь ${s.shoes}`;
+// The user's own choices and the sizes of the clothes they wear win over the measurements.
+export function sizesSummary(body, { chosen = {}, owned = {}, gender = "" } = {}) {
+  const g = body?.gender || gender;
+  const pickOf = (system) => (validChoice(system, chosen?.[system], g) ? chosen[system] : validChoice(system, owned?.[system]?.pick, g) ? owned[system].pick : null);
+  const fromBody = body?.height ? Object.fromEntries(sizesFor(body).map((x) => [x.id, x.value])) : {};
+  const top = pickOf("letter") ? sizeLabel("letter", pickOf("letter")) : fromBody.top;
+  const jeans = pickOf("wl") ? sizeLabel("wl", pickOf("wl")) : fromBody.jeans;
+  const shoes = pickOf("shoe") ? sizeLabel("shoe", pickOf("shoe")) : fromBody.shoes;
+  return [top && `верх ${top}`, jeans && `джинсы ${jeans}`, shoes && `обувь ${shoes}`].filter(Boolean).join(", ");
 }
 
 // Full size charts with conversions, and the user's row. Sources of the conventions: EN 13402

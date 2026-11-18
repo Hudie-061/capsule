@@ -63,8 +63,15 @@ export async function analyzeClothing(imageBlob) {
   const { items } = await task("detect", { image: await toPayload(imageBlob) });
   return (items || []).map((item) => {
     const [ymin = 0, xmin = 0, ymax = 1000, xmax = 1000] = item.box_2d || [];
-    return { name: item.name, part: item.part, kind: item.kind || "", color: item.color, secondaryColor: item.secondaryColor || null, tags: item.tags, boundingBox: { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin } };
+    // size and brand only when a label is readable in the photo (the Worker never guesses them)
+    return { name: item.name, part: item.part, kind: item.kind || "", color: item.color, secondaryColor: item.secondaryColor || null, tags: item.tags, size: item.size || "", brand: item.brand || "", boundingBox: { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin } };
   });
+}
+
+// A photo of a clothing label → { isLabel, size, brand } (the size as printed, e.g. "M", "W32 L32", "EU 42").
+export async function readLabel(imageBlob) {
+  const result = await task("label", { image: await toPayload(imageBlob) });
+  return { isLabel: Boolean(result.isLabel), size: String(result.size || ""), brand: String(result.brand || "") };
 }
 
 export async function cutoutGarment({ image, metadata, chromaKey, direction }) {

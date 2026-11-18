@@ -120,6 +120,13 @@ export async function addPurchase(entry) {
   await kv.set("purchases", list.slice(-300));
   return list;
 }
+// A purchase is found by its time; used for «Как сел размер?» ({ fit: "small" | "good" | ... }).
+export async function updatePurchase(at, patch) {
+  const list = await getPurchases();
+  const next = list.map((p) => (p.at === at ? { ...p, ...patch } : p));
+  await kv.set("purchases", next);
+  return next;
+}
 
 export async function clearFeedback() {
   await kv.set("feedback", []);

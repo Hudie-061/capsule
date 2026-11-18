@@ -27,6 +27,9 @@ function normalizeBoundingBox(value = {}) {
   return { x, y, width: Math.max(1, Math.min(1000 - x, num("width", 1000 - x))), height: Math.max(1, Math.min(1000 - y, num("height", 1000 - y))) };
 }
 
+const cleanSize = (v) => (typeof v === "string" ? v.replace(/[^\w\s./½-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 24) : "");
+const FITS = new Set(["small", "good", "big"]);
+
 function normalizeMetadata(value = {}) {
   const m = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
@@ -37,6 +40,8 @@ function normalizeMetadata(value = {}) {
     tags: Array.isArray(m.tags) ? m.tags.filter((t) => typeof t === "string").map((t) => t.trim().toLowerCase().slice(0, 40)).filter(Boolean).slice(0, 12) : [],
     brand: typeof m.brand === "string" ? m.brand.trim().slice(0, 40) : "",
     kind: typeof m.kind === "string" ? m.kind.trim().toLowerCase().replace(/[^a-z -]/g, "").slice(0, 24) : "",
+    // the size, only when a size label was readable in the photo ("M", "W32 L32", "EU 42")
+    size: cleanSize(m.size),
     boundingBox: normalizeBoundingBox(m.boundingBox),
   };
 }
@@ -119,6 +124,8 @@ async function persistImported(job, includeModeled) {
     tags: Array.isArray(m.tags) ? m.tags : [],
     brand: m.brand || existing?.brand || "",
     kind: m.kind || existing?.kind || "",
+    size: existing?.size || m.size || "",
+    fit: existing?.fit || "",
     image: garmentPath,
     thumbnail: garmentPath,
     modeledImage: modeledImage || existing?.modeledImage || null,
@@ -261,8 +268,10 @@ async function route(method, pathname, input) {
   if (patch && method === "PATCH") {
     const record = await getRecord(patch[1]);
     if (!record) throw new HttpError(404, "Вещь не найдена");
-    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette"];
+    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette", "size", "fit"];
     if (typeof input.brand === "string") input.brand = input.brand.trim().slice(0, 40);
+    if ("size" in input) input.size = cleanSize(input.size);
+    if ("fit" in input && !FITS.has(input.fit)) input.fit = "";
     for (const key of allowed) if (key in input) record[key] = input[key];
     await putRecord(record);
     return resolveRecord(record);

@@ -8,19 +8,23 @@
 //    Each chain also gets a free search link on its own site. Until the owner adds the search key,
 //    the screen honestly falls back to those links.
 // 3. «Купил здесь» records a purchase; the saving vs the most expensive offer adds up for the month.
-// 4. «Мой размер»: the size for this kind of piece (from «Мерки и размеры», or estimated from the
-//    profile's height and weight) is added to the search; the chip turns it off.
+// 4. «Мой размер»: the size for this kind of piece — the user's pick, else the size of the clothes
+//    they wear (items with a size and «впору»), else «Мерки и размеры» or an estimate from height and
+//    weight — is added to the search; the chip turns it off.
+// 5. «Как сел размер?»: a few days after «Купил здесь» the app asks how the size fit and moves the
+//    saved size one step if it was too small or too big.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor, zalandoSearch } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, getPalette, inMonth, saveGapsCache } from "./lib/daily.js";
 import { kindOf } from "./lib/kinds.js";
-import { bodyOrProfile, getBody, sizeForKind, sizeOptions, sizePick, sizeSystem } from "./lib/sizes.js";
+import { bodyOrProfile, getBody, sizeForKind, sizeLabel, sizeOptions, sizePick, sizeSystem, stepLength, stepSize, wardrobeSizes } from "./lib/sizes.js";
+import { SizeChips } from "./size-chips.jsx";
 import { splitList } from "./lib/style-options.js";
 import { SetupError, offerLinkTask, pricesTask } from "./lib/gemini.js";
 import { plural } from "./lib/plural.js";
-import { addPurchase, getFeedback, getLearned, getProfile, getPurchases, getSettings, saveSettings } from "./lib/settings.js";
+import { addPurchase, getFeedback, getLearned, getProfile, getPurchases, getSettings, saveSettings, updatePurchase } from "./lib/settings.js";
 import { findGaps } from "./lib/stylist.js";
 import { GarmentIcon, Icon, Sheet, Spinner, isDressItem } from "./ui.jsx";
 
@@ -75,6 +79,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [pricesOff, setPricesOff] = useState(false);
   const [purchases, setPurchases] = useState([]);
   const [bought, setBought] = useState("");
+  const [fitDone, setFitDone] = useState(""); // the answer to «Как сел размер?», shown once
   const [fit, setFit] = useState({ body: null, oversize: false, gender: "" });
   const [chosenSizes, setChosenSizes] = useState({});
   const [sizeOpen, setSizeOpen] = useState(false);
@@ -215,8 +220,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const gap = gaps[Math.min(selected, gaps.length - 1)] || null;
   // The size for this kind of piece: the user's own pick in «Покупки» wins over the measurements.
   const sizeGender = fit.body?.gender || fit.gender;
+  const owned = useMemo(() => wardrobeSizes(items, sizeGender), [items, sizeGender]);
   const system = gap ? sizeSystem(kindOf(gap), sizeGender) : null;
-  const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize, chosen: chosenSizes, gender: fit.gender }) : null;
+  const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize, chosen: chosenSizes, owned, gender: fit.gender }) : null;
   const options = system ? sizeOptions(system, sizeGender) : null;
   const pick = system ? sizePick(system, size) : null;
   // English only towards shops (the interface stays Russian); the person's gender is part of the query.
@@ -283,9 +289,28 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const markBought = async (offer) => {
     const all = offers.data?.offers || [];
     const top = all.length ? Math.max(...all.map((o) => o.total)) : offer.total;
-    const next = await addPurchase({ title: offer.title, store: offer.store, link: direct[idOf(offer)] || "", total: offer.total, maxTotal: top, saving: Math.max(0, Math.round((top - offer.total) * 100) / 100), currency, gap: gap?.item || "" });
+    // the size it was bought in, so «Как сел размер?» can move it later
+    const sized = system && size ? { kind: kindOf(gap), system, size: sizePick(system, size), sizeValue: size.value } : {};
+    const next = await addPurchase({ title: offer.title, store: offer.store, link: direct[idOf(offer)] || "", total: offer.total, maxTotal: top, saving: Math.max(0, Math.round((top - offer.total) * 100) / 100), currency, gap: gap?.item || "", ...sized });
     setPurchases([...next]);
     setBought(idOf(offer));
+  };
+
+  // «Как сел размер?» — asked once, from 4 days after the purchase (time for the delivery).
+  const fitAsk = purchases.find((p) => p.system && p.size != null && !p.fit && Date.now() - Date.parse(p.at) > 4 * DAY);
+  const answerFit = async (p, answer) => {
+    const g = sizeGender;
+    let nextPick = p.size;
+    if (answer === "small") nextPick = stepSize(p.system, p.size, 1, g) ?? p.size;
+    if (answer === "big") nextPick = stepSize(p.system, p.size, -1, g) ?? p.size;
+    if (answer === "short") nextPick = stepLength(p.size, 1) ?? p.size;
+    if (answer === "long") nextPick = stepLength(p.size, -1) ?? p.size;
+    setPurchases(await updatePurchase(p.at, { fit: answer }));
+    if (answer === "skip") return;
+    const chosen = { ...chosenSizes, [p.system]: nextPick };
+    setChosenSizes(chosen);
+    await saveSettings({ chosenSizes: chosen });
+    setFitDone(answer === "good" ? `Запомнил: ${sizeLabel(p.system, nextPick)} тебе впору.` : `Запомнил: теперь ищу ${sizeLabel(p.system, nextPick)}.`);
   };
 
   // The first tap asks the Worker for the shop's own product page (one search, cached for a week),
@@ -370,6 +395,22 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         <span className="hero-card__icon"><Icon name="trend" size={26} /></span>
       </div>
 
+      {fitDone && <p className="status-line status-line--ok fade">{fitDone}</p>}
+      {fitAsk && (
+        <div className="fit-ask rise" key={fitAsk.at}>
+          <span className="fit-ask__title">Как сел размер?</span>
+          <span className="fit-ask__what">{fitAsk.gap || fitAsk.title} · <b>{fitAsk.sizeValue}</b>{fitAsk.store ? ` · ${fitAsk.store}` : ""}</span>
+          <div className="chip-row" role="group" aria-label="Как сел размер">
+            {(fitAsk.system === "wl"
+              ? [["small", "Тесно в талии"], ["short", "Коротки"], ["good", "Впору"], ["long", "Длинные"], ["big", "Свободно в талии"]]
+              : [["small", "Мал"], ["good", "Впору"], ["big", "Велик"]]
+            ).map(([id, label]) => <button type="button" key={id} className="chip" onClick={() => answerFit(fitAsk, id)}>{label}</button>)}
+          </div>
+          <button type="button" className="text-button" onClick={() => answerFit(fitAsk, "skip")}>Не покупал или вернул</button>
+          <span className="tiny-text">Поправлю размер для следующих покупок — мерить себя не нужно.</span>
+        </div>
+      )}
+
       <div className="section-head">
         <span className="section-title">Чего не хватает капсуле</span>
         {cache && !busy ? <button type="button" className="text-button" onClick={() => setWishOpen(true)} disabled={!setupReady} aria-haspopup="dialog"><Icon name="refresh" size={14} width={2} /> обновить</button> : <span className="tiny-text">по твоему гардеробу</span>}
@@ -416,7 +457,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           </button>
           <span className="tiny-text">
             {size
-              ? [size.detail, size.chosen ? "твой выбор" : size.estimated ? "по оценке" : "по меркам", mode === "chains" ? "выбери его на сайте магазина" : sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")
+              ? [size.detail, size.chosen ? "твой выбор" : size.owned ? "по твоим вещам" : size.estimated ? "по оценке" : "по меркам", mode === "chains" ? "выбери его на сайте магазина" : sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")
               : "нажми, чтобы искать вещи твоего размера"}
           </span>
           {size?.note && <span className="size-card__note my-size__note">{size.note}</span>}
@@ -558,30 +599,11 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       <Sheet open={sizeOpen && Boolean(options)} onClose={() => setSizeOpen(false)} title="Твой размер" subtitle={gap ? `${gap.item} · один выбор для всех таких вещей` : ""}>
         {options && (
           <div className="size-picker">
-            <span className="section-label">{options.label}</span>
-            <div className="chip-row">
-              {options.main.map((v) => {
-                const on = system === "wl" ? pick?.w === v : pick === v;
-                return (
-                  <button type="button" key={v} className={`chip size-chip${on ? " is-on" : ""}`} aria-pressed={on}
-                    onClick={() => chooseSize(system === "wl" ? { w: v, l: pick?.l || 32 } : v)}>{v}</button>
-                );
-              })}
-            </div>
-            {options.second && (
-              <>
-                <span className="section-label">{options.secondLabel}</span>
-                <div className="chip-row">
-                  {options.second.map((v) => {
-                    const on = pick?.l === v;
-                    return <button type="button" key={v} className={`chip size-chip${on ? " is-on" : ""}`} aria-pressed={on} onClick={() => chooseSize({ w: pick?.w || 32, l: v })}>{v}</button>;
-                  })}
-                </div>
-              </>
-            )}
+            <SizeChips system={system} gender={sizeGender} value={pick} onChange={(v) => v != null && chooseSize(v)} />
+            {size?.owned && <p className="tiny-text">Сейчас размер взят по твоим вещам: {size.ownedNames.join(", ")}.</p>}
             {size?.chosen && (
               <button type="button" className="text-button size-picker__reset" onClick={() => chooseSize(null)}>
-                {size.suggested ? `Вернуть размер по меркам — ${size.suggested}` : "Сбросить мой выбор"}
+                {size.fallback ? `Вернуть размер ${size.fallback.from === "owned" ? "по твоим вещам" : "по меркам"} — ${size.fallback.value}` : "Сбросить мой выбор"}
               </button>
             )}
             <label className="size-picker__switch">

@@ -7,7 +7,7 @@ import { normalizeImage } from "./lib/image.js";
 import { clearFeedback, EMPTY_PROFILE, getFeedback, getLearned, getModelReference, getProfile, getSettings, saveLearned, saveProfile, saveSettings, setModelReference } from "./lib/settings.js";
 import { COUNTRIES } from "./lib/countries.js";
 import { plural } from "./lib/plural.js";
-import { getBody, sizesSummary } from "./lib/sizes.js";
+import { getBody, sizesSummary, wardrobeSizes } from "./lib/sizes.js";
 import { AVOID, FITS, GENDERS, GOALS, PLACES, STYLES, genderLabel, joinList, splitList } from "./lib/style-options.js";
 import { Icon } from "./ui.jsx";
 
@@ -71,9 +71,10 @@ function ChipsField({ label, options, value, onChange }) {
 }
 
 // «Ты»: who the stylist dresses, with sizes. Opens the measurements screen with the 3D body.
-function YouCard({ profile, body, onOpen }) {
+// Sizes: the user's own choices and the clothes that fit come first, then the measurements.
+function YouCard({ profile, body, chosen, owned, onOpen }) {
   const facts = [profile.gender ? genderLabel(profile.gender) : "", profile.height, profile.weight].filter(Boolean).join(" · ");
-  const sizes = sizesSummary(body);
+  const sizes = sizesSummary(body, { chosen, owned, gender: profile.gender });
   return (
     <button type="button" className="you-card rise" onClick={onOpen}>
       <span className="you-card__avatar"><Icon name="ruler" size={24} /></span>
@@ -154,7 +155,8 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
 
       <KnowledgeCard items={items} feedback={feedback} learned={learned} onShowRules={() => rulesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} />
 
-      <YouCard profile={profile} body={body || (Number.parseInt(profile.height, 10) ? { gender: profile.gender, height: Number.parseInt(profile.height, 10), weight: Number.parseInt(profile.weight, 10) || 70 } : null)} onOpen={() => onOpen("sizes")} />
+      <YouCard profile={profile} body={body || (Number.parseInt(profile.height, 10) ? { gender: profile.gender, height: Number.parseInt(profile.height, 10), weight: Number.parseInt(profile.weight, 10) || 70 } : null)}
+        chosen={settings.chosenSizes} owned={wardrobeSizes(items, body?.gender || profile.gender)} onOpen={() => onOpen("sizes")} />
 
       <button type="button" className="palette-teaser rise" onClick={() => onOpen("palette")}>
         <span className="palette-teaser__text">

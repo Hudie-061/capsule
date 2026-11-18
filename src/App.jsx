@@ -4,7 +4,11 @@ import { WardrobeImportFlow } from "./import-flow.jsx";
 import { OptimizedImage } from "./OptimizedImage.jsx";
 import { localFetch } from "./lib/local-api.js";
 import { plural } from "./lib/plural.js";
-import { getSettings } from "./lib/settings.js";
+import { getProfile, getSettings } from "./lib/settings.js";
+import { readLabel } from "./lib/gemini.js";
+import { normalizeImage } from "./lib/image.js";
+import { kindOf } from "./lib/kinds.js";
+import { FIT_OPTIONS, getBody, parseSize, sizeLabel, sizeOptions, sizeSystem } from "./lib/sizes.js";
 import { Onboarding, isOnboardingDone } from "./onboarding.jsx";
 import { PaletteView } from "./palette.jsx";
 import { SettingsView } from "./settings-panel.jsx";
@@ -49,6 +53,8 @@ function persistEdit(item) {
     color: item.color || null,
     secondaryColor: item.secondaryColor || null,
     tags: item.tags || [],
+    size: item.size || "",
+    fit: item.fit || "",
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(edits));
 }
@@ -296,7 +302,73 @@ function ColorControl({ label, field, value, palette, onChange, sampling, setSam
   );
 }
 
-function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleStatus }) {
+// The size of a piece and how it sits: the most reliable way to know the person's size without a tape
+// measure (src/lib/sizes.js → wardrobeSizes). The size can be read from a photo of the label.
+function ItemSize({ draft, setDraft, kind, gender }) {
+  const [status, setStatus] = useState({ busy: false, text: "" });
+  const system = sizeSystem(kind, gender);
+  const options = system ? sizeOptions(system, gender) : null;
+  if (!options) return null;
+  const pick = parseSize(draft.size, system, gender);
+  const setPick = (next) => setDraft((current) => ({ ...current, size: next == null ? "" : sizeLabel(system, next) }));
+  const num = (v) => (v === "" ? null : Number(v));
+
+  const readTag = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setStatus({ busy: true, text: "Читаю бирку…" });
+    try {
+      const found = await readLabel(await normalizeImage(file, 1280));
+      if (!found.isLabel) { setStatus({ busy: false, text: "Не вижу бирку с размером — сфотографируй её поближе." }); return; }
+      const parsed = parseSize(found.size, system, gender);
+      setDraft((current) => ({ ...current, size: parsed != null ? sizeLabel(system, parsed) : found.size || current.size, brand: current.brand || found.brand || "" }));
+      setStatus({ busy: false, text: found.size ? `На бирке: ${found.size}${found.brand ? ` · ${found.brand}` : ""}` : "Размер на бирке не нашёл — выбери сам." });
+    } catch (error) {
+      setStatus({ busy: false, text: error?.message || "Не получилось прочитать бирку." });
+    }
+  };
+
+  return (
+    <div className="field item-size">
+      <span>Размер</span>
+      <div className="item-size__row">
+        {system === "wl" ? (
+          <>
+            <select aria-label="Талия, W" value={pick?.w ?? ""} onChange={(e) => setPick(num(e.target.value) == null ? null : { w: num(e.target.value), l: pick?.l || 32 })}>
+              <option value="">W —</option>
+              {options.main.map((v) => <option key={v} value={v}>W{v}</option>)}
+            </select>
+            <select aria-label="Длина, L" value={pick?.l ?? ""} disabled={!pick} onChange={(e) => setPick({ w: pick.w, l: num(e.target.value) })}>
+              {options.second.map((v) => <option key={v} value={v}>L{v}</option>)}
+            </select>
+          </>
+        ) : (
+          <select aria-label={options.label} value={pick ?? ""} onChange={(e) => setPick(e.target.value === "" ? null : system === "letter" ? e.target.value : num(e.target.value))}>
+            <option value="">—</option>
+            {options.main.map((v) => <option key={v} value={v}>{system === "letter" ? v : `EU ${v}`}</option>)}
+          </select>
+        )}
+        <label className="item-size__label">
+          <Icon name="camera" size={16} width={2} /> {status.busy ? "Читаю…" : "Сфоткать бирку"}
+          <input type="file" accept="image/*" capture="environment" hidden onChange={readTag} disabled={status.busy} />
+        </label>
+      </div>
+      {!pick && draft.size && <p className="item-size__note">На бирке: {draft.size}</p>}
+      {status.text && <p className="item-size__note" aria-live="polite">{status.text}</p>}
+      <span>Как сидит</span>
+      <div className="chip-row" role="group" aria-label="Как сидит">
+        {FIT_OPTIONS.map(([id, label]) => (
+          <button type="button" key={id} className={`chip${draft.fit === id ? " is-on" : ""}`} aria-pressed={draft.fit === id}
+            onClick={() => setDraft((current) => ({ ...current, fit: current.fit === id ? "" : id }))}>{label}</button>
+        ))}
+      </div>
+      <p className="item-size__note">По вещам, которые сидят впору, подберу размер в магазинах — мерить себя не нужно.</p>
+    </div>
+  );
+}
+
+function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleStatus, kind, gender }) {
   const suggestedSecondary = palette.find((color) => color.toLowerCase() !== draft.color?.toLowerCase()) || "#9a9286";
 
   return (
@@ -319,6 +391,8 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
           placeholder="Например: Uniqlo"
         />
       </label>
+
+      <ItemSize draft={draft} setDraft={setDraft} kind={kind} gender={gender} />
 
       <label className="field">
         <span>Категория</span>
@@ -363,6 +437,9 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
   );
 }
 
+// What the editor edits; `size` is as on the label ("M", "W32 L32", "EU 42"), `fit` is "small" | "good" | "big".
+const draftOf = (item) => ({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], size: item.size || "", fit: item.fit || "" });
+
 function ItemViewer({ item, onClose, onSave, onDelete }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
@@ -371,11 +448,15 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
   const [sampling, setSampling] = useState(null);
   const [sampleStatus, setSampleStatus] = useState("");
   const [palette, setPalette] = useState(item.palette || []);
-  const [draft, setDraft] = useState({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+  const [draft, setDraft] = useState(() => draftOf(item));
+  const [gender, setGender] = useState(""); // for the size system of the item (women's trousers are EU, men's W/L)
   const [shaking, setShaking] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
   const type = TYPE_MAP[item.part]?.singular || "Wardrobe item";
   const hasModeledImage = Boolean(item.modeledImage);
+  useEffect(() => {
+    Promise.all([getBody(), getProfile()]).then(([body, profile]) => setGender(body?.gender || profile?.gender || "")).catch(() => {});
+  }, []);
   const pieceRotation = useMemo(() => {
     const hash = [...item.id].reduce((total, character) => total + character.charCodeAt(0), 0);
     return `${(hash % 9) - 4}deg`;
@@ -390,6 +471,8 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
       color: draft.color?.toLowerCase() || null,
       secondaryColor: draft.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(draft.tags),
+      size: draft.size.trim(),
+      fit: draft.fit,
     }) !== JSON.stringify({
       name: (item.name || "").trim(),
       brand: (item.brand || "").trim(),
@@ -397,6 +480,8 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
       color: item.color?.toLowerCase() || null,
       secondaryColor: item.secondaryColor?.toLowerCase() || null,
       tags: normalizedTags(item.tags || []),
+      size: (item.size || "").trim(),
+      fit: item.fit || "",
     });
   }, [draft, item]);
 
@@ -441,18 +526,18 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
     setSampling(null);
     setSampleStatus("");
     setPalette(item.palette || []);
-    setDraft({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft(draftOf(item));
   }, [item]);
 
   const cancelEditing = () => {
-    setDraft({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])] });
+    setDraft(draftOf(item));
     setSampling(null);
     setSampleStatus("");
     onClose();
   };
 
   const saveEditing = () => {
-    onSave({ ...item, ...draft, name: draft.name.trim(), brand: draft.brand.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean) });
+    onSave({ ...item, ...draft, name: draft.name.trim(), brand: draft.brand.trim(), size: draft.size.trim(), tags: draft.tags.map((tag) => tag.trim()).filter(Boolean) });
     setSampling(null);
     setSampleStatus("Changes saved.");
   };
@@ -541,6 +626,8 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
           sampling={sampling}
           setSampling={setSampling}
           sampleStatus={sampleStatus}
+          kind={kindOf({ ...item, part: draft.part })}
+          gender={gender}
         />
 
         {closeBlocked && <p className="unsaved-notice" role="status">Сохрани или отмени изменения перед закрытием.</p>}
@@ -675,8 +762,8 @@ export function App() {
     setItems((current) => current.map((item) => item.id === updatedItem.id ? updatedItem : item));
     persistEdit(updatedItem);
     if (updatedItem.id.startsWith("import-")) {
-      const { name, brand, part, color, secondaryColor, tags, palette } = updatedItem;
-      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette }) }).catch(() => {});
+      const { name, brand, part, color, secondaryColor, tags, palette, size, fit } = updatedItem;
+      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette, size, fit }) }).catch(() => {});
     }
     showToast("Сохранено");
   };

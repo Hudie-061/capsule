@@ -1,12 +1,18 @@
 // First launch: a short path to a personal app, every step skippable.
-// welcome → access code (only if missing) → who you are → style quiz → first items.
+// welcome → access code (only if missing) → who you are → usual sizes → style quiz → first items.
 // Answers go into the same style profile the stylist reads, so they can be changed in «Профиль».
+// The usual sizes («Какой размер обычно носишь?») are the same choice as the size sheet in «Покупки»
+// (settings.chosenSizes): three taps instead of a tape measure.
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { kv } from "./lib/db.js";
 import { checkConnection } from "./lib/gemini.js";
 import { getProfile, getSettings, saveProfile, saveSettings } from "./lib/settings.js";
-import { getBody, saveBody } from "./lib/sizes.js";
+import { getBody, saveBody, sizeForKind, sizeLabel } from "./lib/sizes.js";
+import { SizeChips } from "./size-chips.jsx";
 import { GarmentIcon, Icon } from "./ui.jsx";
+
+// The usual sizes asked at first launch: [size system, label, a kind of piece for the estimate].
+const USUAL = [["letter", "Футболки, свитеры, худи", "t-shirt"], ["wl", "Джинсы", "jeans"], ["euBottom", "Брюки и юбки, EU", "trousers", "female"], ["shoe", "Обувь, EU", "sneakers"]];
 
 import { AVOID, FITS, GENDERS, PLACES, STYLES } from "./lib/style-options.js";
 
@@ -37,7 +43,8 @@ function Chips({ options, value, onChange, label }) {
 }
 
 export function Onboarding({ needsAccess, onDone, onAddItems }) {
-  const steps = useMemo(() => ["welcome", ...(needsAccess ? ["access"] : []), "about", "style", "items"], [needsAccess]);
+  const steps = useMemo(() => ["welcome", ...(needsAccess ? ["access"] : []), "about", "sizes", "style", "items"], [needsAccess]);
+  const [usual, setUsual] = useState({}); // { letter: "M", wl: { w: 32, l: 32 }, shoe: 43 } — only what was tapped
   const [index, setIndex] = useState(0);
   const step = steps[index];
   const [code, setCode] = useState("");
@@ -60,8 +67,17 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
       const w = Number.parseInt(p.weight, 10); if (w >= 40 && w <= 150) setWeight(w);
       setStyles(split(p.styles)); setFits(split(p.fits)); setAvoid(split(p.avoid)); setPlaces(split(p.places));
     });
-    getSettings().then((s) => setCode(s.accessCode || ""));
+    getSettings().then((s) => { setCode(s.accessCode || ""); setUsual(s.chosenSizes || {}); });
   }, []);
+
+  const saveUsual = async () => {
+    const s = await getSettings();
+    const picked = Object.fromEntries(Object.entries(usual).filter(([, v]) => v != null));
+    await saveSettings({ chosenSizes: { ...s.chosenSizes, ...picked } });
+  };
+  // a hint from height and weight, so the question is easy to answer («примерно M»)
+  const roughBody = bodyTouched ? { gender, height, weight, measured: {} } : null;
+  const roughSize = (kind) => (roughBody ? sizeForKind(kind, roughBody)?.value || "" : "");
 
   const save = async () => {
     const p = await getProfile();
@@ -79,6 +95,7 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
 
   const next = async () => {
     if (step === "about" || step === "style") await save();
+    if (step === "sizes") await saveUsual();
     setIndex((i) => Math.min(i + 1, steps.length - 1));
   };
   const back = () => setIndex((i) => Math.max(0, i - 1));
@@ -97,7 +114,7 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
       measured: { ...(body.measured || {}), ...values },
       sources: { ...(body.sources || {}), ...Object.fromEntries(Object.keys(values).map((id) => [id, "photo"])) },
     });
-    setHeight(h); setBodyTouched(true); setPhotoOpen(false);
+    setHeight(h); setBodyTouched(true); // the photo screen stays open for the palette question
     setPhotoDone(values);
   };
 
@@ -168,7 +185,7 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
               <p className="tiny-text">Рост и вес нужны только для пропорций манекена и подсказок по размеру. Хранятся на телефоне.</p>
               <button type="button" className="photo-cta" onClick={() => setPhotoOpen(true)}>
                 <span className="row-card__icon"><Icon name="camera" size={22} /></span>
-                <span><b>Мерки по фото</b><small>Сфотографируйся в полный рост — посчитаю обхваты и подберу размер. Фото не уходит с телефона.</small></span>
+                <span><b>Мерки по фото</b><small>Можно без помощника: поставь телефон — он сам скажет, как встать, и посчитает обхваты. Фото не уходит с телефона.</small></span>
                 <Icon name="chevron" size={20} width={2} />
               </button>
               {photoDone && (
@@ -181,6 +198,28 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
                   <PhotoMeasure gender={gender} height={height} weight={weight} onClose={() => setPhotoOpen(false)} onSave={applyPhoto} />
                 </Suspense>
               )}
+            </>
+          )}
+
+          {step === "sizes" && (
+            <>
+              <h1 className="screen-title">Какой размер обычно носишь?</h1>
+              <p className="muted-text lead-text">Три тапа вместо сантиметровой ленты — по ним ищу вещи в магазинах. Не помнишь — пропусти: посчитаю по росту и весу, по фото или по бирке на твоих вещах.</p>
+              <div className="usual-sizes">
+                {USUAL.filter(([, , , only]) => !only || only === gender).map(([system, label, kind]) => {
+                  const rough = roughSize(kind);
+                  return (
+                    <div key={system}>
+                      <SizeChips system={system} gender={gender} label={label} value={usual[system] ?? null} scroll
+                        onChange={(v) => setUsual((u) => ({ ...u, [system]: v }))} />
+                      {usual[system] != null
+                        ? <p className="usual-sizes__hint">Выбрано: {sizeLabel(system, usual[system])}</p>
+                        : rough && <p className="usual-sizes__hint">По росту и весу примерно {rough}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="tiny-text">Поменять можно в «Покупках» — у каждой вещи есть «Мой размер».</p>
             </>
           )}
 
@@ -216,7 +255,7 @@ export function Onboarding({ needsAccess, onDone, onAddItems }) {
               <button type="button" className="btn btn--ghost" onClick={next}>У меня пока нет кода</button>
             </>
           )}
-          {(step === "about" || step === "style") && (
+          {(step === "about" || step === "sizes" || step === "style") && (
             <div className="action-row">
               <button type="button" className="btn btn--outline btn--grow1" onClick={back}>Назад</button>
               <button type="button" className="btn btn--dark btn--grow2" onClick={next}>Дальше</button>

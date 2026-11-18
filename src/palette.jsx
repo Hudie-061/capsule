@@ -63,6 +63,23 @@ async function smallSelfie(file) {
   return canvasToBlob(canvas, "image/jpeg", 0.85);
 }
 
+// The whole palette step for one face photo: the `palette` task, then the result, the small selfie for the
+// drape and the profile line for the stylist are saved. Used by «Моя палитра» (a selfie) and by «Мерки
+// по фото» (the face cut from the full-length photo, `fromBody`). Returns { saved, selfie }.
+export async function paletteFromPhoto(photo, { calibrated = false, fromBody = false } = {}) {
+  const result = await paletteTask(photo, { calibrated });
+  const saved = await savePalette(fromBody ? { ...result, fromBody: true } : result);
+  let selfie = null;
+  try {
+    selfie = await smallSelfie(photo);
+    await blobs.set(SELFIE, selfie);
+  } catch { /* the palette works without the photo */ }
+  // The stylist reads «Цвета, которые идут» from the profile, so outfits and shopping use the palette too.
+  const profile = await getProfile();
+  await saveProfile({ ...profile, palette: paletteText(result) });
+  return { saved, selfie };
+}
+
 // The stylist reads this from the profile: season, undertone and contrast (for the outfit's contrast), colours.
 function paletteText(p) {
   const traits = [p.undertone, p.contrast].filter(Boolean).join(", ");
@@ -137,19 +154,12 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
         ctx.putImageData(pixels, 0, 0);
       }
       const file = await canvasToBlob(out, "image/jpeg", 0.92);
-      const result = await paletteTask(file, { calibrated: Boolean(gains) });
+      const done = await paletteFromPhoto(file, { calibrated: Boolean(gains) });
       URL.revokeObjectURL(calib.url);
       setCalib(null);
-      setSaved(await savePalette(result));
+      setSaved(done.saved);
       setDrape({ best: 0, avoid: 0 });
-      try {
-        const small = await smallSelfie(file);
-        await blobs.set(SELFIE, small);
-        setSelfie(URL.createObjectURL(small));
-      } catch { /* the palette works without the photo */ }
-      // The stylist reads «Цвета, которые идут» from the profile, so outfits and shopping use the palette too.
-      const profile = await getProfile();
-      await saveProfile({ ...profile, palette: paletteText(result) });
+      if (done.selfie) setSelfie(URL.createObjectURL(done.selfie));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -235,6 +245,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
           {p.why ? <p className="palette-why">{p.why}</p> : <p className="palette-note">Сделай новое селфи — теперь объясняю, почему тебе идёт каждый цвет.</p>}
           <HintChips tips={p.traits} tone="dark" label="Из чего складывается цветотип" />
           {p.photoNote && <p className="palette-note">{p.photoNote}</p>}
+          {p.fromBody && <p className="palette-note">Палитра определена по лицу с фото в полный рост — там оно небольшое. Для точности сделай крупное селфи при дневном свете.</p>}
           <Segmented role="tablist" tone="dark" label="Раздел палитры" value={tab} onChange={setTab} options={[{ id: "colors", label: "Цвета" }, { id: "jewel", label: "Металлы и украшения" }]} />
           {tab === "colors" ? (
             <div className="palette-section">
