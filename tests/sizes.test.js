@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { kindOf, slotOf } from "../src/lib/kinds.js";
-import { bodyOrProfile, estimate, fullBody, sizeChart, sizeForKind, sizesFor, sizesSummary } from "../src/lib/sizes.js";
+import { bodyOrProfile, estimate, fullBody, sizeChart, sizeForKind, sizeOptions, sizePick, sizeSystem, sizesFor, sizesSummary } from "../src/lib/sizes.js";
 
 describe("sizes", () => {
   it("estimates plausible measurements from height and weight", () => {
@@ -119,5 +119,43 @@ describe("size charts", () => {
     // a half size is added as its own row
     const half = sizeChart("shoes", woman);
     expect(mine(half)[0][0]).toBe(39.5);
+  });
+});
+
+describe("sizes picked in «Покупки»", () => {
+  const man = { gender: "male", height: 182, weight: 80, measured: {} };
+
+  it("knows the size system of every kind of piece", () => {
+    expect(sizeSystem("t-shirt", "male")).toBe("letter");
+    expect(sizeSystem("blazer", "male")).toBe("euTop");
+    expect(sizeSystem("jeans", "female")).toBe("wl");
+    expect(sizeSystem("trousers", "male")).toBe("wl");
+    expect(sizeSystem("trousers", "female")).toBe("euBottom");
+    expect(sizeSystem("shorts", "male")).toBe("w");
+    expect(sizeSystem("sneakers", "")).toBe("shoe");
+    expect(sizeSystem("bag", "male")).toBe(null);
+    expect(sizeOptions("shoe").main).toContain(42.5);
+    expect(sizeOptions("euTop", "male").main).toEqual([44, 46, 48, 50, 52, 54, 56, 58, 60]);
+  });
+
+  it("uses the user's own pick over the measurements, and remembers what the measurements say", () => {
+    const measured = sizeForKind("jeans", man);
+    const chosen = sizeForKind("jeans", man, { chosen: { wl: { w: 33, l: 34 } } });
+    expect(chosen).toMatchObject({ value: "W33 L34", query: "W33 L34", chosen: true, estimated: false, suggested: measured.value });
+    expect(sizeForKind("trousers", man, { chosen: { wl: { w: 33, l: 34 } } }).value).toBe("W33 L34"); // same system
+    expect(sizeForKind("sneakers", man, { chosen: { shoe: 42.5 } })).toMatchObject({ value: "EU 42.5", query: "size 42", shown: "size 42.5" });
+    expect(sizeForKind("jeans", man, { chosen: { wl: { w: 99, l: 34 } } }).chosen).toBe(false); // not a real size: ignored
+  });
+
+  it("works without any measurements once a size is picked", () => {
+    expect(sizeForKind("t-shirt", null)).toBe(null);
+    expect(sizeForKind("t-shirt", null, { chosen: { letter: "L" } }).value).toBe("L");
+    expect(sizeForKind("blazer", null, { chosen: { euTop: 52 }, gender: "male" }).value).toBe("EU 52");
+  });
+
+  it("reads the current size back in the picker's terms", () => {
+    expect(sizePick("wl", { value: "W32 L30" })).toEqual({ w: 32, l: 30 });
+    expect(sizePick("shoe", { value: "EU 42.5" })).toBe(42.5);
+    expect(sizePick("letter", { value: "M" })).toBe("M");
   });
 });

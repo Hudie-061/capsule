@@ -2,11 +2,15 @@
 // The selfie is sent once to the `palette` task; the Worker keeps nothing. A small copy stays on the
 // device (IndexedDB) to show the face next to the colours, like a colour analyst's drape: one of the
 // best colours against one to avoid. «Удалить фото» removes it; the palette stays.
+// Before the analysis the selfie can be calibrated with a white sheet of paper held next to the face
+// (src/lib/white-balance.js): the phone finds the sheet, the person can tap it instead, and the colour
+// cast of the camera is removed before the photo leaves the phone.
 import { useEffect, useRef, useState } from "react";
 import { formatShortDate, getPalette, savePalette } from "./lib/daily.js";
 import { blobs } from "./lib/db.js";
 import { paletteTask } from "./lib/gemini.js";
-import { canvasToBlob, loadBitmap, makeCanvas, normalizeImage } from "./lib/image.js";
+import { canvasToBlob, loadBitmap, makeCanvas } from "./lib/image.js";
+import { applyGains, findWhiteSheet, sampleAt, whiteGains } from "./lib/white-balance.js";
 import { getProfile, saveProfile } from "./lib/settings.js";
 import { HintChips, Icon, Segmented } from "./ui.jsx";
 
@@ -68,6 +72,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   const [story, setStory] = useState(null);
   const [selfie, setSelfie] = useState(null);
   const [drape, setDrape] = useState({ best: 0, avoid: 0 });
+  const [calib, setCalib] = useState(null); // { url, full, small, sheet, miss } while the photo is being calibrated
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -77,11 +82,56 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   useEffect(() => () => { if (story) URL.revokeObjectURL(story); }, [story]);
   useEffect(() => () => { if (selfie) URL.revokeObjectURL(selfie); }, [selfie]);
 
-  const analyse = async (file) => {
+  // Step 1: the photo is drawn at 1024 px for the analysis and at 160 px to look for the white sheet.
+  const prepare = async (file) => {
+    setError("");
+    try {
+      const bitmap = await loadBitmap(file);
+      const fit = (side) => Math.min(1, side / Math.max(bitmap.width, bitmap.height));
+      const full = makeCanvas(Math.round(bitmap.width * fit(1024)), Math.round(bitmap.height * fit(1024)));
+      full.getContext("2d").drawImage(bitmap, 0, 0, full.width, full.height);
+      const tiny = makeCanvas(Math.max(1, Math.round(bitmap.width * fit(160))), Math.max(1, Math.round(bitmap.height * fit(160))));
+      const tctx = tiny.getContext("2d", { willReadFrequently: true });
+      tctx.drawImage(bitmap, 0, 0, tiny.width, tiny.height);
+      bitmap.close?.();
+      const small = { data: tctx.getImageData(0, 0, tiny.width, tiny.height).data, width: tiny.width, height: tiny.height };
+      const found = findWhiteSheet(small.data, small.width, small.height);
+      if (calib?.url) URL.revokeObjectURL(calib.url);
+      setCalib({ url: URL.createObjectURL(file), full, small, sheet: found && whiteGains(found.avg) ? found : null, miss: false });
+    } catch (e) {
+      setError(e.message || "Не удалось открыть фото.");
+    }
+  };
+
+  // A tap on the photo marks the sheet by hand.
+  const tapSheet = (event) => {
+    if (!calib) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    const spot = sampleAt(calib.small.data, calib.small.width, calib.small.height, x, y);
+    setCalib({ ...calib, sheet: whiteGains(spot.avg) ? spot : calib.sheet, miss: !whiteGains(spot.avg) });
+  };
+
+  // Step 2: remove the camera's colour cast (if a sheet is marked) and analyse.
+  const analyse = async (useSheet) => {
+    if (!calib) return;
     setBusy(true); setError("");
     try {
-      const selfie = await normalizeImage(file, 1024);
-      const result = await paletteTask(selfie);
+      const gains = useSheet && calib.sheet ? whiteGains(calib.sheet.avg) : null;
+      // A copy, so a retry after an error does not correct the colours twice.
+      const out = makeCanvas(calib.full.width, calib.full.height);
+      const ctx = out.getContext("2d");
+      ctx.drawImage(calib.full, 0, 0);
+      if (gains) {
+        const pixels = ctx.getImageData(0, 0, out.width, out.height);
+        applyGains(pixels.data, gains);
+        ctx.putImageData(pixels, 0, 0);
+      }
+      const file = await canvasToBlob(out, "image/jpeg", 0.92);
+      const result = await paletteTask(file, { calibrated: Boolean(gains) });
+      URL.revokeObjectURL(calib.url);
+      setCalib(null);
       setSaved(await savePalette(result));
       setDrape({ best: 0, avoid: 0 });
       try {
@@ -114,7 +164,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   };
 
   const p = saved?.result;
-  const picker = <input ref={fileRef} type="file" accept="image/*" capture="user" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) analyse(file); }} />;
+  const picker = <input ref={fileRef} type="file" accept="image/*" capture="user" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) prepare(file); }} />;
 
   return (
     <section className="screen palette-screen">
@@ -125,11 +175,40 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
       <h1 className="screen-title screen-title--sub">Моя палитра</h1>
       {picker}
 
-      {!loaded ? null : !p || busy ? (
+      {calib && !busy ? (
+        <div className="palette-card calib rise">
+          <span className="palette-card__season">Калибровка цвета</span>
+          <span className="palette-card__muted">
+            {calib.sheet
+              ? "Нашёл белый лист — выровняю по нему цвета камеры, как колорист по эталону. Если рамка не на листе, нажми на лист."
+              : "Не нашёл белый лист. Нажми на него на фото — или продолжи без калибровки, тогда цвета будут менее точными."}
+          </span>
+          <button type="button" className="calib__photo" onClick={tapSheet} aria-label="Нажми на белый лист на фото">
+            <img src={calib.url} alt="Твоё селфи" />
+            {calib.sheet && (
+              <span className="calib__box" style={{ left: `${calib.sheet.box.x0 * 100}%`, top: `${calib.sheet.box.y0 * 100}%`, width: `${(calib.sheet.box.x1 - calib.sheet.box.x0) * 100}%`, height: `${(calib.sheet.box.y1 - calib.sheet.box.y0) * 100}%` }} />
+            )}
+          </button>
+          {calib.miss && <span className="palette-note">Это не похоже на белый лист — нажми точно на бумагу.</span>}
+          <div className="calib__actions">
+            {calib.sheet && <button type="button" className="btn btn--light" onClick={() => analyse(true)}><Icon name="check" size={18} width={2.2} /> Определить цвета</button>}
+            <button type="button" className={calib.sheet ? "text-button text-button--dark" : "btn btn--light"} onClick={() => analyse(false)}>Без калибровки</button>
+            <button type="button" className="text-button text-button--dark" onClick={() => fileRef.current?.click()}>Другое фото</button>
+          </div>
+          {error && <span className="error-text error-text--dark">{error}</span>}
+        </div>
+      ) : !loaded ? null : !p || busy ? (
         <div className="palette-card palette-card--intro rise">
           <span className="palette-card__avatar"><Icon name="camera" size={28} color="#CFC6BA" /></span>
           <span className="palette-card__season">{busy ? "Смотрю на цвета…" : "Узнай свой цветотип"}</span>
           <span className="palette-card__muted">{busy ? "Это займёт несколько секунд." : "Одно селфи — и я подберу цвета одежды, которые тебе идут, и металлы для украшений. Фото останется только на телефоне, чтобы показать цвета рядом с лицом."}</span>
+          {!busy && (
+            <ul className="calib-tips">
+              <li><b>Днём у окна</b>, лицом к свету, без фильтров</li>
+              <li><b>Белый лист бумаги</b> у лица — по нему я выровняю цвета камеры: лампа и экран делают всех «теплее» или «холоднее». Можно и без листа</li>
+              <li>Волосы и брови видны, без тонального крема — если можно</li>
+            </ul>
+          )}
           {busy ? <span className="shimmer shimmer--dark palette-skeleton" /> : setupReady ? (
             <button type="button" className="btn btn--light" onClick={() => fileRef.current?.click()}>Сделать селфи</button>
           ) : <button type="button" className="btn btn--light" onClick={onOpenAccess}>Сначала введи код доступа</button>}
@@ -142,7 +221,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
             <span className="palette-card__avatar" style={{ borderColor: p.metal?.good?.[0] || "#C9A24A" }}>{selfie ? <img src={selfie} alt="Твоё селфи" /> : <Icon name="profile" size={28} color="#CFC6BA" />}</span>
             <div className="palette-card__heading">
               <span className="palette-card__season">{p.season}</span>
-              <span className="palette-card__muted">{[p.undertone, p.contrast].filter(Boolean).join(" · ")}</span>
+              <span className="palette-card__muted">{[p.undertone, p.contrast, p.calibrated ? "по белому листу" : ""].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
           {p.why ? <p className="palette-why">{p.why}</p> : <p className="palette-note">Сделай новое селфи — теперь объясняю, почему тебе идёт каждый цвет.</p>}

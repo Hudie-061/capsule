@@ -56,7 +56,8 @@ async function toPayload(blob) {
 
 const toBlob = (image) => base64ToBlob(image.data, image.mimeType || "image/png");
 
-const plainItem = (i) => ({ id: i.id, name: i.name, part: i.part, color: i.color, secondaryColor: i.secondaryColor || undefined, tags: i.tags || [], brand: i.brand || undefined, kind: i.kind || undefined });
+// `tone`: the colour described on the phone (src/lib/colors.js), only for the stylist tasks.
+const plainItem = (i) => ({ id: i.id, name: i.name, part: i.part, color: i.color, secondaryColor: i.secondaryColor || undefined, tags: i.tags || [], brand: i.brand || undefined, kind: i.kind || undefined, tone: i.tone || undefined });
 
 export async function analyzeClothing(imageBlob) {
   const { items } = await task("detect", { image: await toPayload(imageBlob) });
@@ -106,6 +107,7 @@ export async function offerLinkTask({ token, store }) {
   return task("offer", { token, store });
 }
 
-export async function paletteTask(selfieBlob) {
-  return task("palette", { image: await toPayload(selfieBlob) });
+// `calibrated`: the selfie was white-balanced on the phone with a white sheet of paper.
+export async function paletteTask(selfieBlob, { calibrated = false } = {}) {
+  return task("palette", { image: await toPayload(selfieBlob), calibrated });
 }

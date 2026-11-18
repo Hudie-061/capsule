@@ -100,8 +100,77 @@ export function sizesFor(body, { oversize = false } = {}) {
 const LETTER_KINDS = new Set(["t-shirt", "shirt", "hoodie", "sweater", "jacket", "coat", "dress"]);
 const SHOE_KINDS = new Set(["sneakers", "boots", "loafers"]);
 
-export function sizeForKind(kind, body, { oversize = false } = {}) {
-  if (!body?.height) return null;
+// ---- sizes the user picks right in «Покупки» ---------------------------------------------------
+// One choice per size system, so a size picked for one pair of jeans also applies to the next jeans
+// and to men's trousers. Stored in settings.chosenSizes: { letter: "M", euTop: 52, wl: { w: 33, l: 32 },
+// euBottom: 40, w: 33, shoe: 42.5 }. A choice wins over the size from measurements.
+const W_SIZES = [...Array.from({ length: 15 }, (_, i) => 26 + i), 42, 44]; // W26–W40 and the big ones
+const L_SIZES = [28, 30, 32, 34, 36];
+const evens = (a, b) => Array.from({ length: (b - a) / 2 + 1 }, (_, i) => a + 2 * i);
+const halves = (a, b) => Array.from({ length: (b - a) * 2 + 1 }, (_, i) => a + i / 2);
+
+export function sizeSystem(kind, gender) {
+  const f = female(gender);
+  if (LETTER_KINDS.has(kind)) return "letter";
+  if (kind === "blazer") return "euTop";
+  if (kind === "jeans" || (kind === "trousers" && !f)) return "wl";
+  if (kind === "trousers" || ((kind === "shorts" || kind === "skirt") && f)) return "euBottom";
+  if (kind === "shorts" || kind === "skirt") return "w";
+  if (SHOE_KINDS.has(kind)) return "shoe";
+  return null;
+}
+
+// What the picker offers for a system: `main` (and `second` for the inside leg of W/L sizes).
+export function sizeOptions(system, gender) {
+  const f = female(gender);
+  if (system === "letter") return { main: LETTERS, label: "Размер" };
+  if (system === "euTop") return { main: f ? evens(32, 50) : evens(44, 60), label: "Размер EU" };
+  if (system === "wl") return { main: W_SIZES, second: L_SIZES, label: "Талия, W", secondLabel: "Длина, L" };
+  if (system === "euBottom") return { main: evens(32, 50), label: "Размер EU" };
+  if (system === "w") return { main: W_SIZES, label: "Талия, W" };
+  if (system === "shoe") return { main: halves(35, 48), label: "Размер EU" };
+  return null;
+}
+
+function validChoice(system, pick, gender) {
+  const o = sizeOptions(system, gender);
+  if (!o || pick == null) return false;
+  if (system === "wl") return o.main.includes(pick?.w) && o.second.includes(pick?.l);
+  return o.main.includes(pick);
+}
+
+function sizeOfChoice(system, pick) {
+  const base = { estimated: false, chosen: true, note: "", system };
+  if (system === "letter") return { ...base, value: pick, query: `size ${pick}`, shown: `size ${pick}`, detail: "" };
+  if (system === "wl") { const wl = `W${pick.w} L${pick.l}`; return { ...base, value: wl, query: wl, shown: wl, detail: "" }; }
+  if (system === "w") return { ...base, value: `W${pick}`, query: `W${pick}`, shown: `W${pick}`, detail: "" };
+  if (system === "shoe") return { ...base, value: `EU ${pick}`, query: `size ${Math.floor(pick)}`, shown: `size ${pick}`, detail: "" };
+  return { ...base, value: `EU ${pick}`, query: `size ${pick}`, shown: `size ${pick}`, detail: "" };
+}
+
+// The current choice in the picker's terms (also when the size comes from measurements).
+export function sizePick(system, size) {
+  if (!size) return null;
+  if (system === "letter") return size.value;
+  if (system === "wl") { const m = /^W(\d+) L(\d+)$/.exec(size.value); return m ? { w: Number(m[1]), l: Number(m[2]) } : null; }
+  if (system === "w") { const m = /^W(\d+)/.exec(size.value); return m ? Number(m[1]) : null; }
+  const m = /^EU ([\d.]+)/.exec(size.value);
+  return m ? Number(m[1]) : null;
+}
+
+// The size to search for: the user's own choice for this system, or the size from measurements.
+// `suggested` is what the measurements say, shown next to a manual choice.
+export function sizeForKind(kind, body, { oversize = false, chosen = {}, gender = "" } = {}) {
+  const g = body?.gender || gender;
+  const system = sizeSystem(kind, g);
+  if (!system) return null;
+  const measured = body?.height ? measuredSize(kind, body, { oversize }) : null;
+  const pick = chosen?.[system];
+  if (validChoice(system, pick, g)) return { ...sizeOfChoice(system, pick), suggested: measured?.value || "" };
+  return measured ? { ...measured, system, chosen: false } : null;
+}
+
+function measuredSize(kind, body, { oversize = false } = {}) {
   const n = sizeNumbers(body);
   const est = (...ids) => ids.some((id) => n.estimated.has(id));
   const wl = `W${n.w} L${n.l}`;

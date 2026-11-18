@@ -207,6 +207,13 @@ button:disabled { cursor: default; }
 .hint-chips--dark .hint-chip { background: rgba(244, 239, 231, .08); border-color: rgba(244, 239, 231, .22); color: #E6DED2; padding: 4px 10px; gap: 4px; font-size: 12px; }
 .hint-chips--dark .hint-chip.is-on { background: #F4EFE7; color: #1E1B18; border-color: #F4EFE7; }
 .hint-chips--dark .hint-bubble { background: #F4EFE7; color: #1E1B18; }
+.calib-tips { margin: 2px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 1.4; color: #E6DED2; }
+.calib-tips b { color: #F4EFE7; }
+.calib { gap: 12px; }
+.calib__photo { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 18px; overflow: hidden; background: #2E2924; cursor: crosshair; }
+.calib__photo img { display: block; width: 100%; max-height: 52vh; object-fit: contain; }
+.calib__box { position: absolute; border: 3px solid #F4EFE7; border-radius: 8px; box-shadow: 0 0 0 2px #1E1B18, 0 0 0 999px rgba(30, 27, 24, .25); pointer-events: none; }
+.calib__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .palette-why { margin: 0; font-size: 13.5px; line-height: 1.45; color: #E6DED2; }
 .palette-note { margin: 0; font-size: 12.5px; line-height: 1.4; color: #E8B48F; }
 .swatch-why { margin: 2px 0 6px; font-size: 13px; line-height: 1.4; color: #E6DED2; }
@@ -351,6 +358,13 @@ button:disabled { cursor: default; }
 .offer__price { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
 .offer__total { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .badge-best { background: var(--dark); color: var(--on-dark); border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.size-picker { display: flex; flex-direction: column; gap: 10px; }
+.size-picker .section-label { margin-top: 4px; }
+.size-chip { min-width: 52px; justify-content: center; font-variant-numeric: tabular-nums; }
+.size-picker__reset { align-self: flex-start; }
+.size-picker__switch { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: 16px; background: var(--chip); font-size: 14px; line-height: 1.35; cursor: pointer; }
+.size-picker__switch input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--dark); flex-shrink: 0; }
+.size-picker__switch small { display: block; margin-top: 2px; font-size: 12px; color: var(--text-2); }
 .sale-row { display: flex; align-items: center; gap: 8px; margin: -2px 0 10px; }
 .sale-chip {
   display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 14px; border-radius: 999px;

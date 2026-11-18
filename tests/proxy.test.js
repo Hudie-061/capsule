@@ -31,6 +31,7 @@ const call = (path, body, { code = "abc123", origin = "https://huy.github.io", m
 let upstream;
 let topicVerdict;
 let paletteIsPerson;
+let paletteSeason;
 let serp;
 const SERP = { shopping_results: [
   { title: "Dark straight jeans", source: "Zalando", product_id: "101", product_link: "https://shop.example/a", immersive_product_page_token: "eyJlaSI6InRva2VuLWEifQ==", extracted_price: 49.95, extracted_old_price: 59.95, delivery: "Free delivery", thumbnail: "https://img.example/a.jpg" },
@@ -45,6 +46,7 @@ beforeEach(() => {
   upstream = [];
   topicVerdict = true;
   paletteIsPerson = true;
+  paletteSeason = "Мягкая осень";
   serp = SERP;
   vi.stubGlobal("fetch", vi.fn(async (url, init) => {
     if (String(url).includes("serpapi")) {
@@ -65,7 +67,7 @@ beforeEach(() => {
       ] });
     }
     if (prompt.includes("personal colour analysis")) {
-      return reply({ isPerson: paletteIsPerson, season: "Мягкая осень", undertone: "тёплый", contrast: "средний", why: "Тёплая кожа, мягкий контраст", photoNote: "", traits: [{ label: "Подтон", value: "тёплый", why: "золотистая кожа" }, { label: "", value: "x", why: "y" }], best: [{ name: "Олива", hex: "#6f6b3e", why: "повторяет оттенок глаз" }, { name: "Плохой", hex: "olive", why: "x" }], avoid: [], metal: { name: "Золото", good: ["#c9a24a", "gold"], avoid: "silver" }, jewelry: [{ name: "Часы", note: "кожа" }] });
+      return reply({ isPerson: paletteIsPerson, season: paletteSeason, undertone: "тёплый", contrast: "средний", why: "Тёплая кожа, мягкий контраст", photoNote: "", traits: [{ label: "Подтон", value: "тёплый", why: "золотистая кожа" }, { label: "", value: "x", why: "y" }], bestWhy: ["мягкая замена чёрному", "повторяет тёплую кожу"], avoidWhy: ["слишком резкий"], jewelry: [{ name: "Часы", note: "кожа" }] });
     }
     if (prompt.includes("A shopper wants to buy")) {
       // keep only titles with the wanted word, like the real check would
@@ -235,15 +237,25 @@ describe("no general-purpose access", () => {
     expect(out.items[1].color).toBe("#8a7f72");
   });
 
-  it("analyses a selfie palette and refuses photos without a face", async () => {
-    const out = await (await worker.fetch(call("/api/palette", { image: PNG }), env())).json();
+  it("analyses a selfie palette with the fixed fan of the season and refuses photos without a face", async () => {
+    const out = await (await worker.fetch(call("/api/palette", { image: PNG, calibrated: true }), env())).json();
     expect(upstream[0].prompt).toMatch(/ONLY to choose clothing colours/);
+    expect(upstream[0].prompt).toContain("white-balanced on the phone with a white sheet");
+    expect(upstream[0].body.generationConfig.temperature).toBe(0);
     expect(out.season).toBe("Мягкая осень");
-    expect(out.best).toEqual([{ name: "Олива", hex: "#6f6b3e", why: "повторяет оттенок глаз" }]); // invalid hex dropped
+    expect(out.calibrated).toBe(true);
+    // the colours come from the season's fan, the model only explains them (in order)
+    expect(out.best).toHaveLength(8);
+    expect(out.best[0]).toEqual({ name: "Тауп", hex: "#8B7D6B", why: "мягкая замена чёрному" });
+    expect(out.best[2]).toEqual({ name: "Сливочный", hex: "#EFE3C8", why: "" });
+    expect(out.avoid.map((c) => c.name)).toEqual(["Чёрный", "Чистый белый", "Фуксия", "Ледяной голубой"]);
     expect(out.why).toBe("Тёплая кожа, мягкий контраст");
     expect(out.traits).toEqual([{ label: "Подтон", value: "тёплый", why: "золотистая кожа" }]); // empty label dropped
     expect(upstream[0].prompt).toContain("12-season system");
-    expect(out.metal).toEqual({ name: "Золото", good: ["#c9a24a"], avoid: "" });
+    expect(out.metal).toEqual({ name: "Матовое и розовое золото", good: ["#C2A15A", "#C9907E"], avoid: "#E3E7EC" });
+    paletteSeason = "Ранняя весна"; // not one of the 12
+    expect((await worker.fetch(call("/api/palette", { image: PNG }), env())).status).toBe(502);
+    paletteSeason = "Мягкая осень";
     paletteIsPerson = false;
     const res = await worker.fetch(call("/api/palette", { image: PNG }), env());
     expect(res.status).toBe(422);
@@ -266,6 +278,16 @@ describe("no general-purpose access", () => {
     expect(prompt).toContain("No shoes are given");
     const images = body.contents[0].parts.slice(1).map((p) => p.inlineData.data);
     expect(images).toEqual([PNG.data, tee.data, hoodie.data]); // person, then garments in the listed order
+  });
+
+  it("passes the colour words measured on the phone to the stylist, clipped", async () => {
+    const toned = [{ ...wardrobe[0], tone: "light warm accent; in the person's palette (Кэмел)" }, { ...wardrobe[1], tone: "x".repeat(500) }];
+    await worker.fetch(call("/api/plan", { wardrobe: toned, count: 8 }), env());
+    const prompt = upstream[0].prompt;
+    expect(prompt).toContain("in the person's palette (Кэмел)");
+    expect(prompt).toContain('Trust "tone" over your own reading of hex codes');
+    expect(prompt).not.toContain("x".repeat(101));
+    expect(prompt).toContain("Create 8 distinct");
   });
 
   it("try-on still works for older app versions that send no garment names", async () => {

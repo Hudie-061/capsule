@@ -2,7 +2,7 @@
 // Front of the card: the pieces; tap one to swap it from your own wardrobe.
 // Back of the card: the mannequin with callouts, or an AI try-on on your photo.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { clearTryOns, defaultMode, formatDay, getDayPlan, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
+import { clearTryOns, defaultMode, formatDay, getDayPlan, getPalette, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
 import { SetupError, tryOnOutfit } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
 import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
@@ -165,7 +165,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     setStatus("loading"); setError(""); setFlipped(false); setCalloutsOpen(false);
     try {
       const when = `${evening ? "Образ на завтра" : "Образ на сегодня"}, ${formatDay(date).toLowerCase()}`;
-      const outfits = await planOutfits({ items: itemsRef.current, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), occasion: occasion ? `${when}. ${occasion}` : when, count: 5 });
+      const outfits = await planOutfits({ items: itemsRef.current, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), occasion: occasion ? `${when}. ${occasion}` : when, count: 5, palette: (await getPalette())?.result || null });
       if (!outfits.length) throw new Error("Не получилось собрать образ. Добавь ещё вещей или попробуй снова.");
       const next = { outfits, index: 0, chosen: null, occasion };
       await saveDayPlan(date, next);

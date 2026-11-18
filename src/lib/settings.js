@@ -30,6 +30,8 @@ export async function getSettings() {
     // Add the user's size to shop searches («Мой размер» in «Покупки»); on unless turned off.
     sizeInSearch: saved.sizeInSearch !== false,
     saleOnly: saved.saleOnly === true,
+    // Sizes picked in «Покупки», one per size system (see sizeSystem in sizes.js).
+    chosenSizes: saved.chosenSizes && typeof saved.chosenSizes === "object" ? saved.chosenSizes : {},
   };
 }
 

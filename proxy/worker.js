@@ -10,7 +10,7 @@
 //   GEMINI_API_KEY   – key from Google AI Studio (project with the AI Pro credits)
 //   ACCESS_CODES     – "name:code,name2:code2"
 //   SERPAPI_KEY      – optional; turns on price search (serpapi.com, Google Shopping)
-// Vars: ALLOWED_ORIGINS, TEXT_MODEL, IMAGE_MODEL, DAILY_TEXT_LIMIT, DAILY_IMAGE_LIMIT, MONTHLY_IMAGE_BUDGET,
+// Vars: ALLOWED_ORIGINS, TEXT_MODEL, IMAGE_MODEL, PALETTE_MODEL (optional, defaults to TEXT_MODEL), DAILY_TEXT_LIMIT, DAILY_IMAGE_LIMIT, MONTHLY_IMAGE_BUDGET,
 //       DAILY_SEARCH_LIMIT, MONTHLY_SEARCH_BUDGET
 // KV binding: USAGE
 
@@ -119,6 +119,8 @@ function item(value) {
     tags: Array.isArray(v.tags) ? v.tags.slice(0, 6).map((t) => text(t, 30)).filter(Boolean) : [],
     brand: text(v.brand, 40) || undefined,
     kind: kind(v.kind) || undefined,
+    // the colour in words, worked out on the phone from Lab values (src/lib/colors.js)
+    tone: text(v.tone, 100) || undefined,
   };
 }
 
@@ -169,8 +171,8 @@ async function gemini(env, model, body) {
   return candidate;
 }
 
-async function askJson(env, prompt, schema, { images = [], temperature = 0.4 } = {}) {
-  const candidate = await gemini(env, models(env).text, {
+async function askJson(env, prompt, schema, { images = [], temperature = 0.4, model = "" } = {}) {
+  const candidate = await gemini(env, model || models(env).text, {
     systemInstruction: { parts: [{ text: SYSTEM }] },
     contents: [{ role: "user", parts: [{ text: prompt }, ...images.map((img) => ({ inlineData: img }))] }],
     generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature },
@@ -274,7 +276,7 @@ BACKGROUND AND LIGHT: plain light warm-grey seamless studio background, soft eve
 }
 
 function catalog(items) {
-  return items.map((i) => ({ id: i.id, type: PART_NAMES[i.part], name: i.name, brand: i.brand, color: i.color, secondaryColor: i.secondaryColor, tags: i.tags }));
+  return items.map((i) => ({ id: i.id, type: PART_NAMES[i.part], name: i.name, brand: i.brand, color: i.color, secondaryColor: i.secondaryColor, tone: i.tone, tags: i.tags }));
 }
 
 function profileText(p) {
@@ -309,7 +311,8 @@ const STYLIST_RULES = `- Colour proportions: one dominant colour (about 60% of t
 - Contrast: match the outfit's light/dark contrast to the person's own contrast from the palette (high contrast: clear light-dark pairs; soft or medium: tonal looks and gentle transitions).
 - Proportion and volume: balance a loose piece with a fitted one; avoid cutting the body in half, prefer about 1/3 to 2/3 (a tucked or half-tucked top with higher-rise bottoms, a cropped layer over long trousers, a long layer over slim bottoms).
 - Formality: keep all pieces within one step of formality (a blazer with jeans works; a blazer with sweatpants only for a streetwear profile). Shoes match the formality and either echo a colour of the outfit or stay neutral.
-- Texture: in tonal or neutral outfits mix a smooth fabric with a textured one so the look is not flat.`;
+- Texture: in tonal or neutral outfits mix a smooth fabric with a textured one so the look is not flat.
+- Wardrobe items may have "tone": the colour measured on the phone (light/medium/dark, warm/cool, neutral or accent, and whether it is in the person's palette or close to a colour to avoid near the face). Trust "tone" over your own reading of hex codes.`;
 
 const GAPS_SCHEMA = {
   type: "OBJECT",
@@ -330,45 +333,119 @@ const GAPS_SCHEMA = {
   required: ["summary", "items"],
 };
 
-const SWATCH = { type: "OBJECT", properties: { name: { type: "STRING" }, hex: { type: "STRING" }, why: { type: "STRING" } }, required: ["name", "hex", "why"] };
+// Reference fans for the 12 seasons. Two people with the same colouring get the same colours, and a new
+// selfie does not invent new shades: the model only decides the season and explains each colour.
+// Every season: 3 neutrals to build outfits on, then 5 colours, 4 colours to keep away from the face, and
+// its metals. The shades follow the usual 12-season palettes of colour-analysis schools (Sci/ART and
+// those that follow it); a fan in a studio has more swatches, these are the most wearable ones.
+const SEASONS = {
+  "Светлая весна": {
+    best: [["Сливочный", "#F3E5C8"], ["Светлый кэмел", "#D2B48C"], ["Тёплый светло-серый", "#C8BFB2"], ["Персиковый", "#F7B58C"], ["Светлый коралл", "#F28C7C"], ["Аква", "#6CCFC8"], ["Сливочно-жёлтый", "#F4DC8A"], ["Барвинок", "#9AA8E0"]],
+    avoid: [["Чёрный", "#111111"], ["Бордо", "#6E1A2E"], ["Тёмный шоколад", "#3E2A1E"], ["Холодная фуксия", "#C2185B"]],
+    metal: { name: "Светлое золото", good: ["#E8C872", "#E5B98A"], avoid: "#7E8288" },
+  },
+  "Тёплая весна": {
+    best: [["Тёплый бежевый", "#EAD7B5"], ["Кэмел", "#C19A6B"], ["Золотисто-коричневый", "#8B5A2B"], ["Томатный", "#E2492F"], ["Оранжевый коралл", "#F2704A"], ["Золотисто-жёлтый", "#F2B630"], ["Травяной", "#6BAF3F"], ["Тёплая бирюза", "#2BB3A3"]],
+    avoid: [["Чёрный", "#111111"], ["Холодный серый", "#8A8F98"], ["Фуксия", "#C2185B"], ["Ледяной голубой", "#CFE8F5"]],
+    metal: { name: "Золото", good: ["#E5B84C", "#D4A35A"], avoid: "#C9CED4" },
+  },
+  "Яркая весна": {
+    best: [["Тёплый белый", "#FAF7F0"], ["Тёмно-синий", "#1F2F6B"], ["Кэмел", "#B98A55"], ["Маковый", "#E8303A"], ["Яркий коралл", "#FF5A4E"], ["Бирюза", "#00B5AD"], ["Изумрудно-зелёный", "#22A35A"], ["Фиалковый", "#7A4FD0"]],
+    avoid: [["Пыльная роза", "#C8A2A2"], ["Приглушённый хаки", "#8E8A63"], ["Серо-бежевый", "#B8AFA2"], ["Бордо", "#6E1A2E"]],
+    metal: { name: "Блестящее золото", good: ["#E5B84C", "#F2D27A"], avoid: "#7A6A55" },
+  },
+  "Светлое лето": {
+    best: [["Мягкий белый", "#F4F1EC"], ["Светло-серый", "#C9C7C5"], ["Серо-голубой", "#8FA3B8"], ["Пудрово-розовый", "#E8B4C0"], ["Лаванда", "#B9A6D6"], ["Небесно-голубой", "#9CC3E6"], ["Холодная мята", "#A8DCCB"], ["Мягкая малина", "#D27896"]],
+    avoid: [["Чёрный", "#111111"], ["Оранжевый", "#F07C1E"], ["Горчица", "#C79A2C"], ["Тёмный шоколад", "#3E2A1E"]],
+    metal: { name: "Серебро и белое золото", good: ["#D7DCE2", "#E3E4E6"], avoid: "#C9A24A" },
+  },
+  "Холодное лето": {
+    best: [["Мягкий белый", "#EEEDEA"], ["Холодный серый", "#8A8D91"], ["Мягкий тёмно-синий", "#34476B"], ["Малиновый", "#B8336A"], ["Холодный розовый", "#E58FB0"], ["Васильковый", "#6F8FCF"], ["Холодная морская волна", "#3E8E8A"], ["Сливовый", "#7B4A7E"]],
+    avoid: [["Оранжевый", "#F07C1E"], ["Горчица", "#C79A2C"], ["Тыквенный", "#D2691E"], ["Чёрный", "#111111"]],
+    metal: { name: "Серебро", good: ["#C9CED4", "#E3E4E6"], avoid: "#C9A24A" },
+  },
+  "Мягкое лето": {
+    best: [["Грейж", "#A39B91"], ["Мягкий графит", "#5A5C60"], ["Серо-синий", "#6E7F94"], ["Пыльная роза", "#C2949A"], ["Шалфей", "#9AAE97"], ["Пыльно-голубой", "#8AA2B8"], ["Приглушённый лиловый", "#9C8AA5"], ["Приглушённая ягода", "#8E4E62"]],
+    avoid: [["Чёрный", "#111111"], ["Чистый белый", "#FFFFFF"], ["Ярко-оранжевый", "#FF6A13"], ["Лимонный", "#F4E04D"]],
+    metal: { name: "Матовое серебро и розовое золото", good: ["#B9BCC0", "#D8A79A"], avoid: "#E5B84C" },
+  },
+  "Мягкая осень": {
+    best: [["Тауп", "#8B7D6B"], ["Кэмел", "#B08D57"], ["Сливочный", "#EFE3C8"], ["Олива", "#6F6B3E"], ["Мягкая терракота", "#B5735A"], ["Тёплый шалфей", "#9AA382"], ["Пыльный персик", "#D9A58B"], ["Приглушённая морская волна", "#4F7D78"]],
+    avoid: [["Чёрный", "#111111"], ["Чистый белый", "#FFFFFF"], ["Фуксия", "#D1338C"], ["Ледяной голубой", "#CFE8F5"]],
+    metal: { name: "Матовое и розовое золото", good: ["#C2A15A", "#C9907E"], avoid: "#E3E7EC" },
+  },
+  "Тёплая осень": {
+    best: [["Тёплый бежевый", "#EAD7B5"], ["Кэмел", "#B5864E"], ["Шоколадный", "#5B3A29"], ["Ржавый", "#B7472A"], ["Горчичный", "#C99A2E"], ["Оливковый", "#6B6B2A"], ["Тыквенный", "#D2691E"], ["Тёмная бирюза", "#1F6F6B"]],
+    avoid: [["Чёрный", "#111111"], ["Холодный розовый", "#E58FB0"], ["Ледяной серый", "#D5D9DE"], ["Королевский синий", "#2948C2"]],
+    metal: { name: "Золото и бронза", good: ["#C9A24A", "#9C6B3C"], avoid: "#D7DCE2" },
+  },
+  "Тёмная осень": {
+    best: [["Тёмный шоколад", "#3E2A1E"], ["Тёмный хаки", "#5A5236"], ["Тёплый графит", "#3F3A36"], ["Тёплое бордо", "#7B2D26"], ["Тёмная терракота", "#9C4A2F"], ["Тёплый изумруд", "#1E6B52"], ["Тёмная горчица", "#B88A1E"], ["Петроль", "#1F5A66"]],
+    avoid: [["Пастельно-розовый", "#F4C2D0"], ["Ледяной голубой", "#CFE8F5"], ["Серебристо-серый", "#C0C4C8"], ["Лаванда", "#B9A6D6"]],
+    metal: { name: "Бронза и медь", good: ["#8C5A2B", "#B87333"], avoid: "#E3E7EC" },
+  },
+  "Тёмная зима": {
+    best: [["Чёрный", "#111111"], ["Угольный", "#333333"], ["Тёмно-синий", "#1B2240"], ["Холодное вино", "#6D1A36"], ["Изумрудный", "#0B6E4F"], ["Королевский синий", "#2948C2"], ["Тёмный фиолетовый", "#4B2A6B"], ["Холодный красный", "#C8102E"]],
+    avoid: [["Кэмел", "#C19A6B"], ["Оранжевый", "#F07C1E"], ["Пыльный персик", "#D9A58B"], ["Оливковый", "#6F6B3E"]],
+    metal: { name: "Серебро и тёмный металл", good: ["#C0C4C8", "#4A4D52"], avoid: "#C9907E" },
+  },
+  "Холодная зима": {
+    best: [["Чистый белый", "#FFFFFF"], ["Чёрный", "#111111"], ["Холодный серый", "#7D8590"], ["Фуксия", "#C2187A"], ["Королевский синий", "#2948C2"], ["Изумрудный", "#009B77"], ["Холодный красный", "#C8102E"], ["Ледяной голубой", "#CFE8F5"]],
+    avoid: [["Оранжевый", "#F07C1E"], ["Горчица", "#C79A2C"], ["Кэмел", "#C19A6B"], ["Тёплый коричневый", "#7A4A2A"]],
+    metal: { name: "Серебро и платина", good: ["#D7DCE2", "#E8EBEF"], avoid: "#C9A24A" },
+  },
+  "Яркая зима": {
+    best: [["Чистый белый", "#FFFFFF"], ["Чёрный", "#111111"], ["Тёмно-синий", "#1B2A6B"], ["Маджента", "#E0218A"], ["Электрик", "#1F4FE0"], ["Яркий изумруд", "#00A86B"], ["Холодный лимонный", "#F5E642"], ["Ярко-красный", "#E0102F"]],
+    avoid: [["Пыльная роза", "#C2949A"], ["Хаки", "#8E8A63"], ["Мягкий кэмел", "#B08D57"], ["Грейж", "#A39B91"]],
+    metal: { name: "Полированное серебро", good: ["#E3E7EC", "#B9C2CC"], avoid: "#9C6B3C" },
+  },
+};
+const SEASON_NAMES = Object.keys(SEASONS);
+
 const PALETTE_SCHEMA = {
   type: "OBJECT",
   properties: {
     isPerson: { type: "BOOLEAN" },
-    season: { type: "STRING" }, undertone: { type: "STRING" }, contrast: { type: "STRING" }, why: { type: "STRING" }, photoNote: { type: "STRING" },
+    season: { type: "STRING", enum: SEASON_NAMES }, undertone: { type: "STRING" }, contrast: { type: "STRING" }, why: { type: "STRING" }, photoNote: { type: "STRING" },
     traits: { type: "ARRAY", items: { type: "OBJECT", properties: { label: { type: "STRING" }, value: { type: "STRING" }, why: { type: "STRING" } }, required: ["label", "value", "why"] } },
-    best: { type: "ARRAY", items: SWATCH },
-    avoid: { type: "ARRAY", items: SWATCH },
-    metal: { type: "OBJECT", properties: { name: { type: "STRING" }, good: { type: "ARRAY", items: { type: "STRING" } }, avoid: { type: "STRING" } }, required: ["name", "good", "avoid"] },
+    bestWhy: { type: "ARRAY", items: { type: "STRING" } },
+    avoidWhy: { type: "ARRAY", items: { type: "STRING" } },
     jewelry: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, note: { type: "STRING" } }, required: ["name", "note"] } },
   },
-  required: ["isPerson", "season", "undertone", "contrast", "why", "photoNote", "traits", "best", "avoid", "metal", "jewelry"],
+  required: ["isPerson", "season", "undertone", "contrast", "why", "photoNote", "traits", "bestWhy", "avoidWhy", "jewelry"],
 };
 
 // Personal colour analysis the way trained analysts do it: the 12-season system (Sci/ART by Kathryn
 // Kalisz and the schools that follow it) describes a person's natural colouring by hue, value and chroma
 // (Munsell's three colour dimensions) plus the contrast between hair, skin and eyes. In a studio it is
-// confirmed by draping fabric under the face; from a selfie it is an estimate, so the light is checked too.
-const PALETTE_PROMPT = `This is a selfie sent to a wardrobe app for a personal colour analysis. The result is used ONLY to choose clothing colours, metals and accessories near the face.
+// confirmed by draping fabric under the face; from a selfie it is an estimate, so the light matters most.
+// The app can white-balance the selfie on the phone with a white sheet of paper held next to the face.
+function palettePrompt(calibrated) {
+  const fans = SEASON_NAMES.map((name) => `${name}: best — ${SEASONS[name].best.map(([n]) => n).join(", ")}; avoid — ${SEASONS[name].avoid.map(([n]) => n).join(", ")}`).join("\n");
+  return `This is a selfie sent to a wardrobe app for a personal colour analysis. The result is used ONLY to choose clothing colours, metals and accessories near the face.
 Work like a trained colour analyst using the 12-season system. Judge the person's natural colouring (skin, hair, eyes, brows) on:
 - hue: warm (golden, peachy), cool (pink, bluish) or neutral undertone;
 - value: light or deep overall colouring;
 - chroma: clear and bright, or soft and muted (greyed) colouring;
 - contrast: how different hair, skin and eyes are in lightness.
-Find the dominant dimension first, then choose one season: Светлая весна, Тёплая весна, Яркая весна, Светлое лето, Холодное лето, Мягкое лето, Мягкая осень, Тёплая осень, Тёмная осень, Тёмная зима, Холодная зима, Яркая зима.
-Correct for the photo: warm indoor light, white balance, filters, make-up and dyed hair change colours; judge evenly lit skin, brows and eyes.
+Find the dominant dimension first, then choose exactly one season from the list below.
+${calibrated
+    ? "The photo was white-balanced on the phone with a white sheet of paper held next to the face, so its colours are close to reality: trust the skin, hair and eye colours you see."
+    : "The photo was NOT colour-calibrated: warm indoor light, white balance, filters, make-up and dyed hair change colours; judge evenly lit skin, brows and eyes and correct for the light."}
 If the photo does not clearly show one real person's face, return isPerson false, empty strings and empty lists.
+The palettes are fixed; you do not invent colours. SEASONS AND THEIR COLOURS:
+${fans}
 Otherwise return isPerson true and, all text in Russian, short and concrete about this person's visible colouring:
-- season: one of the 12 names above.
+- season: one of the 12 names above, exactly as written.
 - undertone: short, e.g. "тёплый подтон"; contrast: short, e.g. "средний контраст".
 - why: 1-2 sentences on which features of the face lead to this season, e.g. "Золотистая кожа и карие глаза — тёплые; волосы и кожа близки по светлоте, контраст мягкий, поэтому приглушённые тёплые цвета".
 - traits: exactly 4 items with label "Подтон", "Глубина", "Яркость", "Контраст": value (1-3 words) and why (one short sentence about this face).
-- best: exactly 8 clothing colours from this season's palette: first 3 neutrals to build outfits on (use them instead of black or white when those do not suit), then 5 colours. Each: short Russian name (1-2 words), #rrggbb, and why (at most 90 characters: what it does next to this face, e.g. "повторяет тёплый оттенок глаз", "мягкая замена чёрному").
-- avoid: exactly 4 colours that work against this face: name, #rrggbb and why (at most 90 characters: what goes wrong, e.g. "слишком холодный — кожа кажется серой").
-- photoNote: empty, or one short sentence if the light, a filter or make-up may have changed the result and a daylight selfie would be more accurate.
-- metal: name of the metals that suit them (e.g. "Золото и бронза"), good: 2 metal colours as #rrggbb, avoid: 1 metal colour to avoid as #rrggbb.
+- bestWhy: exactly 8 short reasons (at most 90 characters each), in the order of the chosen season's "best" colours: what each colour does next to this face, e.g. "повторяет тёплый оттенок глаз", "мягкая замена чёрному".
+- avoidWhy: exactly 4 short reasons, in the order of the chosen season's "avoid" colours: what goes wrong, e.g. "слишком холодный — кожа кажется серой".
+- photoNote: empty, or one short sentence if the light, a filter or make-up may have changed the result and a daylight selfie with a white sheet would be more accurate.
 - jewelry: exactly 4 accessories that suit them (watch, chain, ring, glasses, scarf...): name and a short note about material or colour.
 Describe only colours. Never comment on attractiveness, ethnicity, age, body or health.`;
+}
 
 const LEARN_SCHEMA = {
   type: "OBJECT",
@@ -670,20 +747,21 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
   palette: {
     kind: "text",
     async run(env, input) {
-      const result = await askJson(env, PALETTE_PROMPT, PALETTE_SCHEMA, { images: [image(input.image, "selfie")], temperature: 0.3 });
+      // temperature 0: the same photo gives the same season. `calibrated`: the app white-balanced the
+      // selfie with a white sheet of paper. PALETTE_MODEL can point to a stronger model than TEXT_MODEL.
+      const calibrated = input.calibrated === true;
+      const result = await askJson(env, palettePrompt(calibrated), PALETTE_SCHEMA, { images: [image(input.image, "selfie")], temperature: 0, model: env.PALETTE_MODEL });
       if (result.isPerson !== true) throw new TaskError(422, "На фото не видно лица. Сделай селфи при дневном свете, без фильтров.");
-      const swatches = (value, n) => (Array.isArray(value) ? value : []).filter((c) => HEX.test(c?.hex || "")).slice(0, n).map((c) => ({ name: text(c.name, 24), hex: c.hex, why: text(c.why, 120) }));
-      const metal = result.metal && typeof result.metal === "object" ? result.metal : {};
+      const season = SEASONS[result.season];
+      if (!season) throw new TaskError(502, "Не получилось определить цветотип. Попробуй ещё раз.");
+      const why = (list, i) => text(Array.isArray(list) ? list[i] : "", 120);
       return {
-        season: text(result.season, 40), undertone: text(result.undertone, 40), contrast: text(result.contrast, 40),
-        why: text(result.why, 300), photoNote: text(result.photoNote, 160),
+        season: result.season, undertone: text(result.undertone, 40), contrast: text(result.contrast, 40),
+        why: text(result.why, 300), photoNote: text(result.photoNote, 160), calibrated,
         traits: (Array.isArray(result.traits) ? result.traits : []).slice(0, 4).map((t) => ({ label: text(t?.label, 20), value: text(t?.value, 30), why: text(t?.why, 140) })).filter((t) => t.label && t.value),
-        best: swatches(result.best, 8), avoid: swatches(result.avoid, 4),
-        metal: {
-          name: text(metal.name, 40),
-          good: (Array.isArray(metal.good) ? metal.good : []).filter((c) => HEX.test(c || "")).slice(0, 2),
-          avoid: HEX.test(metal.avoid || "") ? metal.avoid : "",
-        },
+        best: season.best.map(([name, hex], i) => ({ name, hex, why: why(result.bestWhy, i) })),
+        avoid: season.avoid.map(([name, hex], i) => ({ name, hex, why: why(result.avoidWhy, i) })),
+        metal: { ...season.metal, good: [...season.metal.good] },
         jewelry: (Array.isArray(result.jewelry) ? result.jewelry : []).slice(0, 4).map((j) => ({ name: text(j?.name, 40), note: text(j?.note, 60) })).filter((j) => j.name),
       };
     },

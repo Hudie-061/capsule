@@ -14,9 +14,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
-import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
+import { getGapsCache, getPalette, inMonth, saveGapsCache } from "./lib/daily.js";
 import { kindOf } from "./lib/kinds.js";
-import { bodyOrProfile, getBody, sizeForKind } from "./lib/sizes.js";
+import { bodyOrProfile, getBody, sizeForKind, sizeOptions, sizePick, sizeSystem } from "./lib/sizes.js";
 import { splitList } from "./lib/style-options.js";
 import { SetupError, offerLinkTask, pricesTask } from "./lib/gemini.js";
 import { plural } from "./lib/plural.js";
@@ -70,7 +70,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [pricesOff, setPricesOff] = useState(false);
   const [purchases, setPurchases] = useState([]);
   const [bought, setBought] = useState("");
-  const [fit, setFit] = useState({ body: null, oversize: false });
+  const [fit, setFit] = useState({ body: null, oversize: false, gender: "" });
+  const [chosenSizes, setChosenSizes] = useState({});
+  const [sizeOpen, setSizeOpen] = useState(false);
   const [sizeOn, setSizeOn] = useState(true);
   const [saleOnly, setSaleOnly] = useState(false); // Black Friday: only discounted offers
   const [direct, setDirect] = useState({}); // offer id → the product page on the shop's site
@@ -78,15 +80,15 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [blocked, setBlocked] = useState("");
 
   useEffect(() => {
-    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); setSaleOnly(s.saleOnly); });
+    getSettings().then((s) => { setCountry(s.country); setSizeOn(s.sizeInSearch); setSaleOnly(s.saleOnly); setChosenSizes(s.chosenSizes); });
     getPurchases().then(setPurchases);
-    Promise.all([getBody(), getProfile()]).then(([body, profile]) => setFit({ body: bodyOrProfile(body, profile), oversize: splitList(profile.fits).includes("Оверсайз") }));
+    Promise.all([getBody(), getProfile()]).then(([body, profile]) => setFit({ body: bodyOrProfile(body, profile), oversize: splitList(profile.fits).includes("Оверсайз"), gender: profile.gender || "" }));
   }, []);
 
   const load = useCallback(async () => {
     setBusy(true); setError("");
     try {
-      const result = await findGaps({ items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned() });
+      const result = await findGaps({ items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: (await getPalette())?.result || null });
       setCache(await saveGapsCache(result, items.length));
       setSelected(0);
     } catch (e) {
@@ -114,8 +116,12 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     return focus ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: "Похожие вещи — новые и б/у.", focus: true }, ...list] : list;
   }, [cache, focus]);
   const gap = gaps[Math.min(selected, gaps.length - 1)] || null;
-  const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize }) : null;
-  const sizable = gap ? Boolean(sizeForKind(kindOf(gap), { height: 175 })) : false;
+  // The size for this kind of piece: the user's own pick in «Покупки» wins over the measurements.
+  const sizeGender = fit.body?.gender || fit.gender;
+  const system = gap ? sizeSystem(kindOf(gap), sizeGender) : null;
+  const size = gap ? sizeForKind(kindOf(gap), fit.body, { oversize: fit.oversize, chosen: chosenSizes, gender: fit.gender }) : null;
+  const options = system ? sizeOptions(system, sizeGender) : null;
+  const pick = system ? sizePick(system, size) : null;
   const baseQuery = gap ? gap.query || gap.item : "";
   // «Популярные» searches each chain without the size: in Google Shopping "size 50" pulls in second-hand
   // listings that mention the size, and the chains show every size on the product page anyway.
@@ -206,6 +212,16 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     await saveSettings({ saleOnly: next });
   };
 
+  // Picking a size: one tap saves it for every piece of the same size system.
+  const chooseSize = async (value) => {
+    const next = { ...chosenSizes };
+    if (value === null) delete next[system];
+    else next[system] = value;
+    setChosenSizes(next);
+    setBought("");
+    await saveSettings({ chosenSizes: next });
+  };
+
   const toggleSize = async () => {
     const next = !sizeOn;
     setSizeOn(next);
@@ -275,20 +291,20 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         </div>
       )}
       {gap?.why && <p className="muted-text gap-why fade" key={gap.item}>{gap.why}</p>}
-      {gap && size && (
+      {gap && system && (
         <div className="my-size fade" key={`size-${gap.item}`}>
-          <button type="button" className={`my-size__chip${sizeOn ? " is-on" : ""}`} aria-pressed={sizeOn} onClick={toggleSize}>
-            {sizeOn && <Icon name="check" size={14} width={2.6} />}
-            <span>Мой размер <b>{size.value}</b></span>
+          <button type="button" className={`my-size__chip${size ? " is-on" : ""}`} onClick={() => setSizeOpen(true)} aria-haspopup="dialog">
+            <Icon name="ruler" size={14} width={2.2} />
+            <span>{size ? <>Мой размер <b>{size.value}</b></> : "Выбрать размер"}</span>
+            <Icon name="chevron" size={14} width={2.2} />
           </button>
           <span className="tiny-text">
-            {[size.detail, size.estimated ? "по оценке" : "по меркам", mode === "chains" ? "выбери его на сайте магазина" : sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")}
+            {size
+              ? [size.detail, size.chosen ? "твой выбор" : size.estimated ? "по оценке" : "по меркам", mode === "chains" ? "выбери его на сайте магазина" : sizeOn ? "ищу его" : "ищу все размеры"].filter(Boolean).join(" · ")
+              : "нажми, чтобы искать вещи твоего размера"}
           </span>
-          {size.note && <span className="size-card__note my-size__note">{size.note}</span>}
+          {size?.note && <span className="size-card__note my-size__note">{size.note}</span>}
         </div>
-      )}
-      {gap && !size && sizable && onOpenSizes && (
-        <button type="button" className="text-button my-size__add" onClick={onOpenSizes}><Icon name="ruler" size={14} width={2} /> Укажи рост и мерки — буду искать твой размер</button>
       )}
       {error && error !== "setup" && gaps.length > 0 && <p className="error-text">{error}</p>}
 
@@ -386,6 +402,44 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           )}
         </>
       )}
+
+      <Sheet open={sizeOpen && Boolean(options)} onClose={() => setSizeOpen(false)} title="Твой размер" subtitle={gap ? `${gap.item} · один выбор для всех таких вещей` : ""}>
+        {options && (
+          <div className="size-picker">
+            <span className="section-label">{options.label}</span>
+            <div className="chip-row">
+              {options.main.map((v) => {
+                const on = system === "wl" ? pick?.w === v : pick === v;
+                return (
+                  <button type="button" key={v} className={`chip size-chip${on ? " is-on" : ""}`} aria-pressed={on}
+                    onClick={() => chooseSize(system === "wl" ? { w: v, l: pick?.l || 32 } : v)}>{v}</button>
+                );
+              })}
+            </div>
+            {options.second && (
+              <>
+                <span className="section-label">{options.secondLabel}</span>
+                <div className="chip-row">
+                  {options.second.map((v) => {
+                    const on = pick?.l === v;
+                    return <button type="button" key={v} className={`chip size-chip${on ? " is-on" : ""}`} aria-pressed={on} onClick={() => chooseSize({ w: pick?.w || 32, l: v })}>{v}</button>;
+                  })}
+                </div>
+              </>
+            )}
+            {size?.chosen && (
+              <button type="button" className="text-button size-picker__reset" onClick={() => chooseSize(null)}>
+                {size.suggested ? `Вернуть размер по меркам — ${size.suggested}` : "Сбросить мой выбор"}
+              </button>
+            )}
+            <label className="size-picker__switch">
+              <input type="checkbox" checked={sizeOn} onChange={toggleSize} />
+              <span>Добавлять размер в поиск «Все новые» и «Б/у»<small>в «Популярных» размер выбирается на сайте магазина</small></span>
+            </label>
+            {onOpenSizes && <button type="button" className="text-button" onClick={() => { setSizeOpen(false); onOpenSizes(); }}><Icon name="ruler" size={14} width={2} /> Посчитать по меркам</button>}
+          </div>
+        )}
+      </Sheet>
 
       <Sheet open={countryOpen} onClose={() => setCountryOpen(false)} title="Где искать" subtitle="Страна для цен, доставки и сайтов б/у">
         <div className="chip-row">
