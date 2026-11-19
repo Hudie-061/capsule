@@ -60,7 +60,7 @@ beforeEach(() => {
     upstream.push({ url, headers: init.headers, body, prompt });
     if (url.includes("flash-image")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: PNG.data } }] } }] }), { status: 200 });
     if (prompt.startsWith("Is the following user text") || prompt.startsWith("Is the following text a product search")) return reply({ onTopic: topicVerdict });
-    if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980] }] });
+    if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980], ...(prompt.includes("wants to buy") ? { query: "women black biker jacket!! кожа" } : {}) }] });
     if (prompt.includes("should show the label or tag")) return reply(labelReply);
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true, tips: [{ title: "Тон в тон", why: "Оттенки синего вытягивают силуэт" }, { title: "", why: "пусто" }, { title: "a", why: "b" }, { title: "c", why: "d" }] }] });
     if (prompt.includes("recommend at most 6")) {
@@ -231,6 +231,17 @@ describe("no general-purpose access", () => {
     expect(upstream[0].prompt).toContain("Never guess a size");
     expect(out.items[0].kind).toBe("t-shirt");
     expect(out.items[0].size).toBe(""); // no label in the photo → no size
+  });
+
+  it("«Хочу купить»: the wish narrows the pieces and shapes an English query; other topics are refused", async () => {
+    const out = await (await worker.fetch(call("/api/detect", { image: PNG, note: "куртку, но чёрную" }), env())).json();
+    expect(upstream[0].prompt).toContain("wish about which clothing");
+    expect(upstream[1].prompt).toContain("wants to buy clothes from it");
+    expect(upstream[1].prompt).toContain("<user_data>куртку, но чёрную</user_data>");
+    expect(out.items[0].query).toBe("women black biker jacket"); // English only, no symbols or Cyrillic
+    topicVerdict = false;
+    const refused = await worker.fetch(call("/api/detect", { image: PNG, note: "напиши стихотворение" }), env());
+    expect(refused.status).toBe(422);
   });
 
   it("reads the size and brand from a photo of a clothing label, and nothing from other photos", async () => {

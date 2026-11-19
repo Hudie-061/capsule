@@ -42,6 +42,8 @@ function normalizeMetadata(value = {}) {
     kind: typeof m.kind === "string" ? m.kind.trim().toLowerCase().replace(/[^a-z -]/g, "").slice(0, 24) : "",
     // the size, only when a size label was readable in the photo ("M", "W32 L32", "EU 42")
     size: cleanSize(m.size),
+    // an English search query for shops ("women black leather biker jacket"); never Cyrillic
+    query: typeof m.query === "string" && !/[\u0400-\u04FF]/.test(m.query) ? m.query.replace(/[^A-Za-z0-9 '&-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) : "",
     boundingBox: normalizeBoundingBox(m.boundingBox),
   };
 }
@@ -126,6 +128,7 @@ async function persistImported(job, includeModeled) {
     kind: m.kind || existing?.kind || "",
     size: existing?.size || m.size || "",
     fit: existing?.fit || "",
+    query: m.query || existing?.query || "",
     image: garmentPath,
     thumbnail: garmentPath,
     modeledImage: modeledImage || existing?.modeledImage || null,
@@ -268,13 +271,63 @@ async function route(method, pathname, input) {
   if (patch && method === "PATCH") {
     const record = await getRecord(patch[1]);
     if (!record) throw new HttpError(404, "Вещь не найдена");
-    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette", "size", "fit"];
+    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette", "size", "fit", "want", "wishNote"];
+    if ("want" in input) input.want = input.want === true;
+    if ("wishNote" in input) input.wishNote = typeof input.wishNote === "string" ? input.wishNote.trim().slice(0, 200) : "";
     if (typeof input.brand === "string") input.brand = input.brand.trim().slice(0, 40);
     if ("size" in input) input.size = cleanSize(input.size);
     if ("fit" in input && !FITS.has(input.fit)) input.fit = "";
     for (const key of allowed) if (key in input) record[key] = input[key];
     await putRecord(record);
     return resolveRecord(record);
+  }
+
+  // «Хочу купить» — step 1: the pieces on a photo the person found, with their wish in words.
+  // Crops wait in `asset:wish/` until step 2; nothing goes to the wardrobe yet.
+  if (pathname === "/api/import/wish/detect" && method === "POST") {
+    const setup = await setupStatus();
+    if (!setup.ready) throw new HttpError(503, "Сначала впиши код доступа в «Профиле» → «Доступ».");
+    await deleteAssetsWithPrefix("asset:wish/");
+    const note = typeof input.note === "string" ? input.note.trim().slice(0, 200) : "";
+    const original = await normalizeImage(dataUrlToBlob(input.imageDataUrl));
+    const detected = (await analyzeClothing(original, { note })).map(normalizeMetadata);
+    const candidates = [];
+    for (const metadata of detected) {
+      const tempId = uuid();
+      const key = `asset:wish/${tempId}.png`;
+      await blobs.set(key, await cropDetectedItem(original, metadata.boundingBox));
+      candidates.push({ tempId, metadata, preview: await assetUrl(key) });
+    }
+    return { candidates, note };
+  }
+  // step 2: the picked pieces become wardrobe records marked `want` (not used for outfits).
+  if (pathname === "/api/import/wish/add" && method === "POST") {
+    const note = typeof input.note === "string" ? input.note.trim().slice(0, 200) : "";
+    const picks = Array.isArray(input.picks) ? input.picks.slice(0, 8) : [];
+    const records = [];
+    for (const pick of picks) {
+      const tempId = typeof pick?.tempId === "string" && /^[\w-]{8,40}$/.test(pick.tempId) ? pick.tempId : null;
+      const crop = tempId ? await blobs.get(`asset:wish/${tempId}.png`) : null;
+      if (!crop) continue;
+      const m = normalizeMetadata(pick.metadata);
+      const id = `import-wish-${uuid()}`;
+      const image = `asset:lib/${id}-garment.png`;
+      await blobs.set(image, crop);
+      const record = {
+        id, name: m.name, part: m.part, color: m.color, secondaryColor: m.secondaryColor,
+        palette: [m.color, m.secondaryColor].filter(Boolean), tags: m.tags, brand: m.brand, kind: m.kind,
+        size: "", fit: "", query: m.query, want: true, wishNote: note,
+        image, thumbnail: image, modeledImage: null, addedAt: now(),
+      };
+      await putRecord(record);
+      records.push(await resolveRecord(record));
+    }
+    await deleteAssetsWithPrefix("asset:wish/");
+    return { records };
+  }
+  if (pathname === "/api/import/wish/cancel" && method === "POST") {
+    await deleteAssetsWithPrefix("asset:wish/");
+    return { ok: true };
   }
 
   if (pathname === "/api/import/jobs" && method === "POST") {

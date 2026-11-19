@@ -16,7 +16,8 @@ import { ShoppingView } from "./shopping.jsx";
 import { SizesView } from "./sizes.jsx";
 import { TimingView } from "./timing.jsx";
 import { TodayView } from "./today.jsx";
-import { Icon } from "./ui.jsx";
+import { Icon, Segmented } from "./ui.jsx";
+import { WishShelf } from "./wish.jsx";
 import "./v2.css";
 
 const STORAGE_KEY = "open-wardrobe-edits-v1";
@@ -55,6 +56,8 @@ function persistEdit(item) {
     tags: item.tags || [],
     size: item.size || "",
     fit: item.fit || "",
+    want: Boolean(item.want),
+    wishNote: item.wishNote || "",
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(edits));
 }
@@ -440,7 +443,7 @@ function ItemEditor({ draft, setDraft, palette, sampling, setSampling, sampleSta
 // What the editor edits; `size` is as on the label ("M", "W32 L32", "EU 42"), `fit` is "small" | "good" | "big".
 const draftOf = (item) => ({ name: item.name || "", brand: item.brand || "", part: item.part, color: item.color || "#9a9286", secondaryColor: item.secondaryColor || null, tags: [...(item.tags || [])], size: item.size || "", fit: item.fit || "" });
 
-function ItemViewer({ item, onClose, onSave, onDelete }) {
+function ItemViewer({ item, onClose, onSave, onDelete, onMove }) {
   const closeButtonRef = useRef(null);
   const imageRef = useRef(null);
   const samplingCanvasRef = useRef(null);
@@ -632,6 +635,11 @@ function ItemViewer({ item, onClose, onSave, onDelete }) {
 
         {closeBlocked && <p className="unsaved-notice" role="status">Сохрани или отмени изменения перед закрытием.</p>}
 
+        {onMove && (
+          <button type="button" className="move-button" onClick={() => onMove(item, !item.want)}>
+            {item.want ? <><Check size={16} weight="bold" aria-hidden="true" /> Купил — перенести в гардероб</> : <>В «Хочу купить»</>}
+          </button>
+        )}
         <div className="viewer-actions">
           <button className="delete-button" type="button" onClick={() => onDelete(item.id)}>
             <Trash size={15} weight="regular" aria-hidden="true" /> Удалить
@@ -677,6 +685,7 @@ function BottomNav({ tab, onTab, onAdd }) {
 export function App() {
   const [items, setItems] = useState([]);
   const [activeType, setActiveType] = useState("all");
+  const [shelf, setShelf] = useState("have"); // «Есть» or «Хочу купить» in «Гардероб»
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -740,8 +749,11 @@ export function App() {
 
   const selectedItem = items.find((item) => item.id === selectedId) || null;
 
+  // The wardrobe proper («Есть») and the wish list («Хочу купить», `want: true`).
+  const haveItems = useMemo(() => items.filter((item) => !item.want), [items]);
+  const wantItems = useMemo(() => items.filter((item) => item.want), [items]);
   const visibleItems = useMemo(() => {
-    const filtered = activeType === "all" ? items : items.filter((item) => item.part === activeType);
+    const filtered = activeType === "all" ? haveItems : haveItems.filter((item) => item.part === activeType);
     return [...filtered].sort((a, b) => {
       if (activeType === "all") {
         const typeDifference = (TYPE_ORDER[a.part] ?? 99) - (TYPE_ORDER[b.part] ?? 99);
@@ -749,24 +761,39 @@ export function App() {
       }
       return a.id.localeCompare(b.id);
     });
-  }, [activeType, items]);
+  }, [activeType, haveItems]);
 
-  const counts = useMemo(() => Object.fromEntries(TYPES.map((type) => [type.id, type.id === "all" ? items.length : items.filter((item) => item.part === type.id).length])), [items]);
+  const counts = useMemo(() => Object.fromEntries(TYPES.map((type) => [type.id, type.id === "all" ? haveItems.length : haveItems.filter((item) => item.part === type.id).length])), [haveItems]);
 
   const chooseType = (typeId) => {
     setActiveType(typeId);
     setSelectedId(null);
   };
 
-  const saveItem = (updatedItem) => {
+  const saveItem = (updatedItem, toast) => {
     setItems((current) => current.map((item) => item.id === updatedItem.id ? updatedItem : item));
     persistEdit(updatedItem);
     if (updatedItem.id.startsWith("import-")) {
-      const { name, brand, part, color, secondaryColor, tags, palette, size, fit } = updatedItem;
-      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette, size, fit }) }).catch(() => {});
+      const { name, brand, part, color, secondaryColor, tags, palette, size, fit, want, wishNote } = updatedItem;
+      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette, size, fit, want: Boolean(want), wishNote: wishNote || "" }) }).catch(() => {});
     }
-    showToast("Сохранено");
+    if (toast !== false) showToast(toast || "Сохранено");
   };
+
+  // «Хочу купить» ↔ гардероб: a bought wish joins the outfits; any piece can go back to the wish list.
+  const moveItem = (item, want) => {
+    saveItem({ ...item, want }, want ? "Перенёс в «Хочу купить»" : "Перенёс в гардероб — теперь она в образах");
+    setSelectedId(null);
+  };
+  const addWishes = (records) => {
+    if (!records.length) return;
+    setItems((current) => [...current, ...records]);
+    setShelf("want");
+    showToast(`В «Хочу купить»: ${records.length} ${plural(records.length, ["вещь", "вещи", "вещей"])}`);
+  };
+  const findWish = (item) => go("shopping", {
+    focus: { label: item.name, part: item.part, kind: item.kind, color: item.color, query: item.query, from: "wish", why: item.wishNote ? `Из «Хочу купить»: ${item.wishNote}` : "Из «Хочу купить» — ищу такую же вещь в магазинах." },
+  });
 
   const deleteItem = async (id) => {
     if (id.startsWith("import-")) {
@@ -805,9 +832,9 @@ export function App() {
   return (
     <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
       <main className="app-main" key={`${tab}:${sub || ""}`}>
-        {tab === "today" && <TodayView items={items} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast} />}
-        {tab === "shopping" && <ShoppingView items={items} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} onOpenSizes={() => go("profile", { sub: "sizes", backTo: "shopping" })} />}
-        {tab === "profile" && !sub && <SettingsView items={items} focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} onRestartOnboarding={() => setOnboarding({ needsAccess: !setupReady })} />}
+        {tab === "today" && <TodayView items={haveItems} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast} />}
+        {tab === "shopping" && <ShoppingView items={haveItems} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} onOpenSizes={() => go("profile", { sub: "sizes", backTo: "shopping" })} />}
+        {tab === "profile" && !sub && <SettingsView items={haveItems} focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} onRestartOnboarding={() => setOnboarding({ needsAccess: !setupReady })} />}
         {tab === "profile" && sub === "palette" && <PaletteView setupReady={setupReady} onOpenAccess={openAccess} onBack={() => setSub(null)} onFindClothes={() => go("shopping", { refresh: true })} />}
         {tab === "profile" && sub === "timing" && <TimingView onBack={() => setSub(null)} onToast={showToast} />}
         {tab === "profile" && sub === "sizes" && <SizesView onBack={() => (backTo ? go(backTo) : setSub(null))} onToast={showToast} />}
@@ -815,8 +842,14 @@ export function App() {
           <section className="screen screen--wide wardrobe">
             <div className="wardrobe-head rise">
               <h1 className="screen-title">Гардероб</h1>
-              <span className="muted-text">{items.length} {plural(items.length, ["вещь", "вещи", "вещей"])}</span>
+              <span className="muted-text">{haveItems.length} {plural(haveItems.length, ["вещь", "вещи", "вещей"])}</span>
             </div>
+            <Segmented label="Что показать" className="segmented--shelf" value={shelf} onChange={setShelf}
+              options={[{ id: "have", label: `Есть · ${haveItems.length}` }, { id: "want", label: `Хочу купить · ${wantItems.length}` }]} />
+            {shelf === "want" ? (
+              <WishShelf items={wantItems} setupReady={setupReady} onOpenAccess={openAccess} onOpen={setSelectedId}
+                onFind={findWish} onBought={(item) => moveItem(item, false)} onAdded={addWishes} />
+            ) : (<>
             <nav className="category-pills" aria-label="Фильтр по типу вещей">
               {TYPES.map((type) => (
                 <button key={type.id} type="button" className={`filter-pill${activeType === type.id ? " is-on" : ""}`} onClick={() => chooseType(type.id)} aria-pressed={activeType === type.id}>
@@ -827,7 +860,7 @@ export function App() {
 
             {error && <p className="error-text">{error}</p>}
             {!error && loading && <div className="gallery-grid">{[0, 1, 2, 3, 4, 5].map((i) => <span key={i} className="gallery-item gallery-item--skeleton shimmer" />)}</div>}
-            {!error && !loading && !items.length && (
+            {!error && !loading && !haveItems.length && (
               <div className="look-card look-card--empty rise">
                 <span className="empty-icon"><Icon name="camera" size={26} /></span>
                 <div className="card-title">Сфотографируй первые вещи</div>
@@ -836,19 +869,20 @@ export function App() {
               </div>
             )}
 
-            {!!items.length && (
+            {!!haveItems.length && (
               <section className="gallery-grid" aria-label={`${TYPE_MAP[activeType]?.label || "Все"}: вещи`}>
                 {visibleItems.map((item, index) => (
                   <GalleryItem key={item.id} item={item} index={index} selected={selectedId === item.id} onOpen={setSelectedId} />
                 ))}
               </section>
             )}
+            </>)}
           </section>
         )}
       </main>
 
       <BottomNav tab={tab} onTab={(next) => go(next)} onAdd={addItems} />
-      {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} />}
+      {selectedItem && <ItemViewer item={selectedItem} onClose={() => setSelectedId(null)} onSave={saveItem} onDelete={deleteItem} onMove={moveItem} />}
       <WardrobeImportFlow ref={importRef} onGarmentApproved={addImportedItem} onOpenAccess={openAccess} onOpenItem={openItem} />
       {onboarding && <Onboarding needsAccess={onboarding.needsAccess} onDone={() => { setOnboarding(null); go("today"); }} onAddItems={addItems} />}
       {toast && <p className="toast" role="status">{toast}</p>}

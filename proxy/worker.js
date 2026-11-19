@@ -213,7 +213,7 @@ const DETECT_SCHEMA = {
         properties: {
           name: { type: "STRING" }, part: { type: "STRING", enum: PARTS }, kind: { type: "STRING" }, color: { type: "STRING" }, secondaryColor: { type: "STRING" },
           tags: { type: "ARRAY", items: { type: "STRING" } }, box_2d: { type: "ARRAY", items: { type: "INTEGER" } },
-          size: { type: "STRING" }, brand: { type: "STRING" },
+          size: { type: "STRING" }, brand: { type: "STRING" }, query: { type: "STRING" },
         },
         required: ["name", "part", "kind", "color", "tags", "box_2d"],
       },
@@ -231,7 +231,28 @@ For each item return:
 - color: primary colour as #rrggbb; secondaryColor: a genuinely distinct second colour as #rrggbb or an empty string.
 - tags: 1-4 short lowercase details in Russian (fit, fabric, style), e.g. "оверсайз", "варёный", "бэгги".
 - size: ONLY if a size label or tag of this item is clearly readable in the photo, the size printed on it, preferring the European or international size: a letter size ("M", "XL"), waist and length for jeans ("W32 L32"), or the EU number ("EU 42"). Otherwise an empty string. Never guess a size from how the item looks.
-- brand: ONLY if a label or logo of this item clearly shows the brand name, that name; otherwise an empty string.`;
+- brand: ONLY if a label or logo of this item clearly shows the brand name, that name; otherwise an empty string.
+- query: a short English search query for online clothing shops, 3-7 words: colour, garment type and the details that make it this piece (fit, material, pattern); add "men" or "women" when the cut makes it clear. English only, no brand names.`;
+
+// «Хочу купить»: a photo the person found (Pinterest, someone in the street) and their own words about
+// what they want from it. The words narrow the pieces and shape the search query (e.g. another colour).
+function wishPrompt(note) {
+  return `${DETECT_PROMPT}
+The person found this photo and wants to buy clothes from it. Their wish: ${quote(note)}
+If the wish names particular pieces, return only those pieces. Make each "query" match the wish (for example the colour they ask for), still in English.`;
+}
+
+async function requireClothingWish(env, note) {
+  if (!note) return;
+  const verdict = await askJson(env, `Is the following user text ONLY a wish about which clothing, shoes or fashion accessories to buy (which pieces, colour, fit, material, budget)? Answer false for anything else.\n${quote(note)}`, TOPIC_SCHEMA, { temperature: 0 });
+  if (verdict.onTopic !== true) throw new TaskError(422, "Можно писать только про одежду, обувь и аксессуары.");
+}
+
+// An English search query from the model: letters, digits, spaces, hyphens and apostrophes only; no Cyrillic.
+function englishQuery(value) {
+  const q = text(value, 80).replace(/[^A-Za-z0-9 '&-]/g, " ").replace(/\s+/g, " ").trim();
+  return /[A-Za-z]/.test(q) ? q : "";
+}
 
 // A photo of a clothing label (the size tag inside a garment or a shoe tongue) → the size and the brand.
 // Only clothing and shoe labels: anything else returns isLabel = false.
@@ -674,13 +695,15 @@ const TASKS = {
   detect: {
     kind: "text",
     async run(env, input) {
-      const result = await askJson(env, DETECT_PROMPT, DETECT_SCHEMA, { images: [image(input.image)], temperature: 0.2 });
+      const note = text(input.note, 200);
+      await requireClothingWish(env, note);
+      const result = await askJson(env, note ? wishPrompt(note) : DETECT_PROMPT, DETECT_SCHEMA, { images: [image(input.image)], temperature: 0.2 });
       const items = (Array.isArray(result.items) ? result.items : []).slice(0, 8).map((i) => ({
         name: text(i.name, 80), part: PARTS.includes(i.part) ? i.part : "upperbody", kind: kind(i.kind),
         color: HEX.test(i.color || "") ? i.color : "#808080", secondaryColor: HEX.test(i.secondaryColor || "") ? i.secondaryColor : "",
         tags: Array.isArray(i.tags) ? i.tags.slice(0, 4).map((t) => text(t, 30)) : [],
         box_2d: Array.isArray(i.box_2d) ? i.box_2d.slice(0, 4).map((n) => Math.max(0, Math.min(1000, Math.round(Number(n) || 0)))) : [0, 0, 1000, 1000],
-        size: text(i.size, 24), brand: text(i.brand, 40),
+        size: text(i.size, 24), brand: text(i.brand, 40), query: englishQuery(i.query),
       }));
       return { items };
     },

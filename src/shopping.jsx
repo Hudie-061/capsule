@@ -218,7 +218,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const gaps = useMemo(() => {
     const list = cache?.result?.items || [];
     if (focus?.replace) return [...alts.items, ...list];
-    return focus?.label ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: "Похожие вещи — новые и б/у.", focus: true }, ...list] : list;
+    return focus?.label ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: focus.why || "Похожие вещи — новые и б/у.", focus: true, from: focus.from || "" }, ...list] : list;
   }, [cache, focus, alts]);
   const altsLoading = Boolean(focus?.replace) && alts.status === "loading";
   const gap = gaps[Math.min(selected, gaps.length - 1)] || null;
@@ -443,7 +443,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                 <button type="button" className={`gap-card${i === selected ? " is-on" : ""}`} aria-pressed={i === selected} onClick={() => { setSelected(i); setBought(""); }}>
                   <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
                   <span className="gap-card__name">{g.item}</span>
-                  <span className="gap-card__impact">{g.replaceOf ? "вместо твоей" : g.focus ? "из образа" : impact(g, items)}</span>
+                  <span className="gap-card__impact">{g.replaceOf ? "вместо твоей" : g.from === "wish" ? "хочу купить" : g.focus ? "из образа" : impact(g, items)}</span>
                 </button>
                 {!g.focus && <button type="button" className="gap-card__x" onClick={() => dismiss(g)} aria-label={`Больше не предлагать: ${g.item}`} title="Больше не предлагать"><Icon name="close" size={12} width={2.6} /></button>}
               </div>
