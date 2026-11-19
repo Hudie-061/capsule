@@ -1,6 +1,7 @@
 // Small shared pieces of the v2 design: icons, garment silhouettes, the sliding toggle
 // and the bottom sheet. Shapes and sizes follow design/V2-*.dc.html.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { kindOf } from "./lib/kinds.js";
 
 const stroke = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round" };
@@ -124,9 +125,37 @@ export function Segmented({ options, value, onChange, label, tone = "light", cla
 
 // ---- bottom sheet ---------------------------------------------------------------------------
 // Stays mounted for the slide-out, so both directions animate (0.4s, design easing).
+// Drawn on top of the page (a portal), so the screen behind can step back while it is open
+// (`has-sheet` on <body>, staging); dragging the grip or the title down closes it, like system sheets.
+let openSheets = 0;
 export function Sheet({ open, onClose, title, subtitle, children, className = "" }) {
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(false);
+  const [drag, setDrag] = useState(0);
+  const dragFrom = useRef(null);
+
+  useEffect(() => {
+    if (!shown) return undefined;
+    openSheets += 1;
+    document.body.classList.add("has-sheet");
+    return () => {
+      openSheets = Math.max(0, openSheets - 1);
+      if (!openSheets) document.body.classList.remove("has-sheet");
+    };
+  }, [shown]);
+
+  const dragStart = (e) => {
+    if (e.target.closest("button") || (e.button !== undefined && e.button !== 0)) return;
+    dragFrom.current = e.clientY;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const dragMove = (e) => { if (dragFrom.current !== null) setDrag(Math.max(0, e.clientY - dragFrom.current)); };
+  const dragEnd = () => {
+    if (dragFrom.current === null) return;
+    dragFrom.current = null;
+    if (drag > 90) onClose();
+    setDrag(0);
+  };
 
   useEffect(() => {
     if (open) {
@@ -148,23 +177,43 @@ export function Sheet({ open, onClose, title, subtitle, children, className = ""
   }, [open, onClose]);
 
   if (!mounted) return null;
-  return (
+  return createPortal(
     <div className={`sheet-layer${shown ? " is-open" : ""}`}>
-      <div className="sheet-backdrop" onClick={onClose} />
-      <div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title}>
-        <div className="sheet__grip" aria-hidden="true" />
-        {(title || subtitle) && (
-          <div className="sheet__head">
-            <div>
-              {title && <div className="sheet__title">{title}</div>}
-              {subtitle && <div className="sheet__subtitle">{subtitle}</div>}
+      <div className="sheet-backdrop" onClick={onClose} style={drag ? { opacity: Math.max(0.2, 1 - drag / 400) } : undefined} />
+      <div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} style={drag ? { transform: `translateY(${drag}px)`, transition: "none" } : undefined}>
+        <div className="sheet__drag" onPointerDown={dragStart} onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd}>
+          <div className="sheet__grip" aria-hidden="true" />
+          {(title || subtitle) && (
+            <div className="sheet__head">
+              <div>
+                {title && <div className="sheet__title">{title}</div>}
+                {subtitle && <div className="sheet__subtitle">{subtitle}</div>}
+              </div>
+              <button type="button" className="round-button" aria-label="Закрыть" onClick={onClose}><Icon name="close" size={18} width={2.2} /></button>
             </div>
-            <button type="button" className="round-button" aria-label="Закрыть" onClick={onClose}><Icon name="close" size={18} width={2.2} /></button>
-          </div>
-        )}
+          )}
+        </div>
         <div className="sheet__body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
+  );
+}
+
+// While the stylist (an AI call, 3–10 s) works: what is happening right now, a new step every ~1.6 s,
+// so the wait never looks frozen (Doherty threshold: show progress within 0.4 s). Stops at the last
+// step instead of looping, so it never pretends to be further along than it is.
+export function WaitLine({ phrases, tone = "" }) {
+  const [step, setStep] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setStep((n) => Math.min(n + 1, phrases.length - 1)), 1600);
+    return () => clearInterval(timer);
+  }, [phrases.length]);
+  return (
+    <p className={`wait-line${tone === "dark" ? " wait-line--dark" : ""}`} aria-live="polite">
+      <span className="spinner" aria-hidden="true" />
+      <span key={step} className="fade">{phrases[step]}</span>
+    </p>
   );
 }
 

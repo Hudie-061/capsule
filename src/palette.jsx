@@ -14,7 +14,7 @@ import { applyGains, findWhiteSheet, sampleAt, whiteGains } from "./lib/white-ba
 import { getProfile, saveProfile } from "./lib/settings.js";
 import { getBody } from "./lib/sizes.js";
 import { FaceSticker } from "./face-sticker.jsx";
-import { HintChips, Icon, Segmented } from "./ui.jsx";
+import { HintChips, Icon, Segmented, WaitLine } from "./ui.jsx";
 
 // Story image 1080×1920 drawn on a canvas, so no screenshot library is needed.
 async function storyImage(p) {
@@ -227,7 +227,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               <li>Волосы и брови видны, без тонального крема — если можно</li>
             </ul>
           )}
-          {busy ? <span className="shimmer shimmer--dark palette-skeleton" /> : setupReady ? (
+          {busy ? <><span className="shimmer shimmer--dark palette-skeleton" /><WaitLine tone="dark" phrases={["Смотрю на свет и цвет кожи…", "Сравниваю с 12 сезонами…", "Объясняю, почему тебе идут цвета…"]} /></> : setupReady ? (
             <button type="button" className="btn btn--light" onClick={() => fileRef.current?.click()}>Сделать селфи</button>
           ) : <button type="button" className="btn btn--light" onClick={onOpenAccess}>Сначала введи код доступа</button>}
           {error && <span className="error-text error-text--dark">{error}</span>}

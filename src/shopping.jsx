@@ -26,7 +26,7 @@ import { SetupError, offerLinkTask, pricesTask } from "./lib/gemini.js";
 import { plural } from "./lib/plural.js";
 import { addPurchase, getFeedback, getLearned, getProfile, getPurchases, getSettings, saveSettings, updatePurchase } from "./lib/settings.js";
 import { findGaps } from "./lib/stylist.js";
-import { GarmentIcon, Icon, Sheet, Spinner, isDressItem } from "./ui.jsx";
+import { GarmentIcon, Icon, Sheet, Spinner, WaitLine, isDressItem } from "./ui.jsx";
 
 // The refresh sheet: what to look for, the budget per piece and the mood. Ids match the Worker.
 const WISH_CATEGORIES = [["jeans", "Джинсы"], ["trousers", "Брюки"], ["tees", "Футболки"], ["shirts", "Рубашки"], ["knit", "Свитеры и худи"], ["blazers", "Пиджаки"], ["outer", "Куртки и пальто"], ["shoes", "Обувь"], ["accessories", "Аксессуары"]];
@@ -82,6 +82,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const [purchases, setPurchases] = useState([]);
   const [bought, setBought] = useState("");
   const [fitDone, setFitDone] = useState(""); // the answer to «Как сел размер?», shown once
+  const [allShops, setAllShops] = useState(false); // shop tiles: 4 first, the rest on «ещё» (fewer choices at once)
+  const [savedBump, setSavedBump] = useState(0); // «Сэкономлено» jumps when a purchase is marked
   const [fit, setFit] = useState({ body: null, oversize: false, gender: "" });
   const [chosenSizes, setChosenSizes] = useState({});
   const [sizeOpen, setSizeOpen] = useState(false);
@@ -296,6 +298,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     const next = await addPurchase({ title: offer.title, store: offer.store, link: direct[idOf(offer)] || "", total: offer.total, maxTotal: top, saving: Math.max(0, Math.round((top - offer.total) * 100) / 100), currency, gap: gap?.item || "", ...sized });
     setPurchases([...next]);
     setBought(idOf(offer));
+    setSavedBump((n) => n + 1);
   };
 
   // «Как сел размер?» — asked once, from 4 days after the purchase (time for the delivery).
@@ -389,7 +392,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       <div className="hero-card rise" style={{ animationDelay: ".04s" }}>
         <div className="hero-card__text">
           <span className="hero-card__label">Сэкономлено {inMonth()}</span>
-          <span className="hero-card__value">{money(saved, currency) || money(0, currency)}</span>
+          <span className="hero-card__value"><span key={savedBump} className={savedBump ? "bump" : ""}>{money(saved, currency) || money(0, currency)}</span></span>
           <span className="hero-card__label">
             {monthPurchases.length ? `на ${monthPurchases.length} ${plural(monthPurchases.length, ["покупке", "покупках", "покупках"])} · сравнили цены с доставкой` : "Купил по лучшей цене — отметь, посчитаю экономию"}
           </span>
@@ -421,7 +424,10 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       {error === "setup" || !setupReady ? (
         <div className="info-card rise"><span>Чтобы стилист нашёл, чего не хватает, нужен код доступа.</span><button type="button" className="btn btn--dark btn--small" onClick={onOpenAccess}>Ввести код</button></div>
       ) : busy && !gaps.length ? (
-        <div className="gap-row">{[0, 1, 2].map((i) => <span key={i} className="gap-card shimmer gap-card--skeleton" />)}</div>
+        <>
+          <div className="gap-row">{[0, 1, 2].map((i) => <span key={i} className="gap-card shimmer gap-card--skeleton" />)}</div>
+          <WaitLine phrases={["Смотрю, что уже есть в гардеробе…", "Ищу, чего не хватает капсуле…", "Подбираю цвета под твою палитру…"]} />
+        </>
       ) : !gaps.length ? (
         <div className="info-card rise">
           <span>{items.length < 2 ? "Добавь хотя бы пару вещей — и стилист подскажет, что докупить." : error || "Нажми, чтобы стилист проверил гардероб."}</span>
@@ -497,7 +503,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             <div className="shop-tiles-block">
               <span className="tiny-text">{filter === "used" ? "Сайты б/у — бесплатно, сразу с поиском этой вещи" : "Магазины — бесплатно, откроются уже с твоими фильтрами"}</span>
               <div className="shop-tiles" role="list" aria-label="Магазины">
-                {links.map((s, i) => {
+                {(allShops ? links : links.slice(0, 4)).map((s, i) => {
                   const [badge, color] = BRAND[s.id] || [s.name.replace(/[^A-Za-zА-Яа-я0-9]/g, "").slice(0, 2), "#574D44"];
                   return (
                     <a role="listitem" key={s.id} className={`shop-tile rise${s.id === "zalando" ? " is-main" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
@@ -510,6 +516,9 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                     </a>
                   );
                 })}
+                {links.length > 4 && (
+                  <button type="button" className="shop-more" onClick={() => setAllShops(!allShops)} aria-expanded={allShops}>{allShops ? "Свернуть" : `Ещё ${links.length - 4}`}</button>
+                )}
               </div>
             </div>
           )}
@@ -524,7 +533,10 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           )}
 
           {offers.status === "loading" && (
-            <div className="offer-list">{[0, 1, 2].map((i) => <span key={i} className="offer offer--skeleton shimmer" />)}</div>
+            <>
+              <WaitLine phrases={mode === "chains" ? ["Ищу на Zalando и About You…", "Проверяю, что это та же вещь…", "Считаю цену с доставкой…"] : ["Ищу во всех магазинах…", "Проверяю, что это та же вещь…", "Считаю цену с доставкой…"]} />
+              <div className="offer-list">{[0, 1, 2].map((i) => <span key={i} className="offer offer--skeleton shimmer" />)}</div>
+            </>
           )}
 
           {offers.status === "done" && (

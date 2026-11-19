@@ -9,7 +9,10 @@ import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
 import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, saveLearned, setModelReference } from "./lib/settings.js";
 import { learnFromComment, planOutfits } from "./lib/stylist.js";
 import { kindOf } from "./lib/kinds.js";
-import { GarmentIcon, HintChips, Icon, Segmented, Sheet, isDressItem } from "./ui.jsx";
+import { GarmentIcon, HintChips, Icon, Segmented, Sheet, WaitLine, isDressItem } from "./ui.jsx";
+
+// What the stylist does while the outfits are being made (shown step by step while waiting).
+const PLAN_STEPS = ["Смотрю твой гардероб…", "Подбираю сочетания цветов…", "Проверяю контраст и пропорции…", "Выбираю лучшие образы…"];
 
 const LIKE_REASONS = ["Общий вайб", "Сочетание цветов", "Подчёркивает фигуру", "Удобно на каждый день"];
 // What the stylist takes from each tap, said back to the user right away.
@@ -110,6 +113,8 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const [error, setError] = useState("");
   const [swapId, setSwapId] = useState(null);
   const [flipped, setFlipped] = useState(false);
+  const [flipMove, setFlipMove] = useState(""); // "in" | "out" while the card turns with its wind-up
+  const [arrived, setArrived] = useState(""); // the piece that just came into the outfit (flies in along an arc)
   const [view, setView] = useState("mannequin");
   const [calloutsOpen, setCalloutsOpen] = useState(false);
   const [board, setBoard] = useState(null);
@@ -270,6 +275,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     const outfits = plan.outfits.map((o, i) => (i === plan.index ? { ...o, itemIds: [...new Set(o.itemIds.map((id) => (id === current ? itemId : id)))], edited: true } : o));
     await store({ ...plan, outfits, chosen: null });
     setLikeAt(null);
+    setArrived(itemId);
   };
 
   const changePieces = async (update) => {
@@ -279,7 +285,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     setLikeAt(null);
   };
   const removePiece = (id) => { setSwapId(null); changePieces((ids) => ids.filter((x) => x !== id)); };
-  const addPiece = (id) => { setAdding(false); changePieces((ids) => [...ids.filter((x) => x !== id), id]); };
+  const addPiece = (id) => { setAdding(false); setArrived(id); changePieces((ids) => [...ids.filter((x) => x !== id), id]); };
 
   const runTryOn = async (file) => {
     setTryon({ status: "loading", url: null, error: "" });
@@ -381,7 +387,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
       <div className="look-card look-card--loading" aria-busy="true">
         <div className="look-card__head"><span className="shimmer skeleton-line" /></div>
         <div className="look-tiles">{[0, 1, 2, 3].map((i) => <span key={i} className="shimmer look-tile" />)}</div>
-        <p className="muted-text center-text">Подбираю образ…</p>
+        {status === "loading" ? <WaitLine phrases={PLAN_STEPS} /> : <p className="muted-text center-text">Подбираю образ…</p>}
       </div>
     );
   } else if (status === "error" || !outfit) {
@@ -396,20 +402,20 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     const me = view === "me";
     body = (
       <div className="flip">
-        <div className={`flip__inner${flipped ? " is-flipped" : ""}`}>
+        <div className={`flip__inner${flipped ? " is-flipped" : ""}${flipMove ? ` flip-${flipMove}` : ""}`} onAnimationEnd={(e) => { if (e.target === e.currentTarget) setFlipMove(""); }}>
           <section className="look-card flip__face" aria-hidden={flipped} inert={flipped}>
             <div className="look-card__head">
               <div className="look-card__heading">
                 <div className="look-card__title">{outfit.title}</div>
                 <div className="tag-row">{tags.map((t) => <span className="tag" key={t}>{t}</span>)}</div>
               </div>
-              <button type="button" className="pill-button pill-button--dark" onClick={() => { setFlipped(true); setSwapId(null); }}>
+              <button type="button" className="pill-button pill-button--dark" onClick={() => { setFlipMove("in"); setFlipped(true); setSwapId(null); }}>
                 <Icon name="person" size={20} width={1.9} /> На человеке
               </button>
             </div>
             <div className="look-tiles" data-count={pieces.length + (addGroups.length ? 1 : 0)}>
               {pieces.map((p, i) => (
-                <button type="button" key={p.id} className="look-tile rise" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => setSwapId(p.id)} aria-label={`Заменить: ${p.name}`}>
+                <button type="button" key={p.id} className={`look-tile ${p.id === arrived ? "arrive" : "rise"}`} style={p.id === arrived ? undefined : { animationDelay: `${i * 0.05}s` }} onClick={() => setSwapId(p.id)} onAnimationEnd={() => { if (p.id === arrived) setArrived(""); }} aria-label={`Заменить: ${p.name}`}>
                   {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
                   <span className="look-tile__name">{p.name}</span>
                   <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>
@@ -429,7 +435,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           <section className="look-card flip__face flip__back" aria-hidden={!flipped} inert={!flipped}>
             <div className="look-card__head">
               <Segmented label="Как показать образ" className="segmented--wide" value={view} onChange={setView} options={[{ id: "mannequin", label: "Манекен" }, { id: "me", label: "На мне" }]} />
-              <button type="button" className="pill-button" onClick={() => setFlipped(false)}><Icon name="grid" size={18} width={2} /> Вещи</button>
+              <button type="button" className="pill-button" onClick={() => { setFlipMove("out"); setFlipped(false); }}><Icon name="grid" size={18} width={2} /> Вещи</button>
             </div>
             <div className="stage">
               {!me && (

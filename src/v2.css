@@ -17,6 +17,11 @@
   --warn: #A8360A;
   --serif: "Prata", Georgia, "Noto Serif", "Times New Roman", serif;
   --ease: cubic-bezier(.2, .8, .2, 1);
+  /* motion (owner's choice of «20 Principles of UX & Animation», 19.11.2026): four durations and three
+     curves for everything — press, small change, move, the card flip; a spring only for one-off moments */
+  --t-press: 120ms; --t-small: 200ms; --t-move: 350ms; --t-flip: 800ms;
+  --ease-in: cubic-bezier(.5, 0, .9, .4);
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
   --shadow-card: 0 16px 34px rgba(30, 27, 24, .12);
   --shadow-small: 0 4px 12px rgba(30, 27, 24, .08);
   --shadow-on: 0 10px 22px rgba(30, 27, 24, .12);
@@ -44,9 +49,15 @@ button:disabled { cursor: default; }
 .shimmer--dark { background: linear-gradient(90deg, #2E2924 0%, #3F3832 50%, #2E2924 100%); background-size: 400px 100%; }
 .spinner { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid var(--border); border-top-color: var(--dark); animation: spin .8s linear infinite; display: inline-block; }
 
+@keyframes settle { 0% { transform: scale(.94, .9); } 60% { transform: scale(1.03, 1.05); } 100% { transform: scale(1); } }
+@keyframes bump { 0% { transform: scale(1); } 35% { transform: scale(1.18); } 100% { transform: scale(1); } }
+.bump { display: inline-block; animation: bump .5s var(--spring); }
+
+/* the phone's «reduce motion»: no movement, only the end state */
 @media (prefers-reduced-motion: reduce) {
-  .rise, .pop, .fade, .shimmer { animation: none !important; }
-  .flip__inner, .sheet, .sheet-backdrop, .segmented__thumb { transition: none !important; }
+  .rise, .pop, .fade, .shimmer, .bump, .arrive, .flip-in, .flip-out, .btn.is-done, .btn.is-done svg, .offer__bought.is-on svg, .learned-line, .wait-line span { animation: none !important; }
+  .flip__inner, .sheet, .sheet-backdrop, .segmented__thumb, .app-main, .btn { transition: none !important; }
+  .btn:active:not(:disabled) { transform: none; }
 }
 
 /* ---- shell ------------------------------------------------------------------------------- */
@@ -74,12 +85,14 @@ button:disabled { cursor: default; }
   min-height: 52px; padding: 0 22px; border-radius: 999px; border: 1px solid transparent;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   font: inherit; font-size: 15px; font-weight: 600; text-decoration: none; white-space: nowrap;
-  transition: background .2s, color .2s, box-shadow .25s, transform .15s, opacity .2s;
+  transition: background .2s, color .2s, box-shadow .25s, transform var(--t-press) var(--ease), opacity .2s;
 }
-.btn:active:not(:disabled) { transform: scale(.98); }
+/* squash under the finger, spring back (principles 1 and 10) */
+.btn:active:not(:disabled) { transform: scale(.96, .94); }
 .btn:disabled { opacity: .45; }
 .btn--dark { background: var(--dark); color: var(--on-dark); }
-.btn--dark.is-done { background: var(--dark-2); }
+.btn--dark.is-done { background: var(--dark-2); animation: settle .45s var(--spring); }
+.btn.is-done svg, .offer__bought.is-on svg { animation: pop .4s var(--spring) both; }
 .btn--outline { background: transparent; color: var(--dark); border-color: var(--dark); font-weight: 500; }
 .btn--ghost { background: transparent; color: var(--dark); text-decoration: underline; text-underline-offset: 3px; padding: 0 10px; }
 .btn--light { background: var(--on-dark); color: var(--dark); }
@@ -123,7 +136,7 @@ button:disabled { cursor: default; }
 }
 .chip.is-on { background: var(--dark); color: var(--on-dark); border-color: var(--dark); }
 .chip { display: inline-flex; align-items: center; gap: 5px; }
-.learned-line { margin: 2px 0 0; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--chip); color: var(--text-tag); font-size: 12.5px; font-weight: 600; text-align: left; }
+.learned-line { animation: slide-in .35s var(--spring) both; margin: 2px 0 0; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--chip); color: var(--text-tag); font-size: 12.5px; font-weight: 600; text-align: left; }
 
 /* ---- sliding toggle ------------------------------------------------------------------------ */
 .segmented { position: relative; height: 40px; flex-shrink: 0; background: #E8DFD2; border-radius: 14px; padding: 4px; display: flex; }
@@ -331,11 +344,13 @@ button:disabled { cursor: default; }
 .gap-scroll { position: relative; }
 .gap-slot { position: relative; display: flex; scroll-snap-align: start; min-width: 0; }
 .gap-slot .gap-card { flex: 1; min-width: 0; }
+/* × «больше не предлагать»: a 26 px circle, but a 44 px place to tap (Fitts, bigger hit areas) */
 .gap-card__x {
-  position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border-radius: 50%; border: 0; padding: 0;
-  display: flex; align-items: center; justify-content: center; background: rgba(255, 253, 249, .92); color: var(--text-2);
-  box-shadow: var(--shadow-small); cursor: pointer;
+  position: absolute; top: -3px; right: -3px; width: 44px; height: 44px; border-radius: 50%; border: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center; background: transparent; color: var(--text-2); cursor: pointer;
 }
+.gap-card__x::before { content: ""; position: absolute; inset: 9px; border-radius: 50%; background: rgba(255, 253, 249, .92); box-shadow: var(--shadow-small); }
+.gap-card__x svg { position: relative; }
 .gap-arrow {
   position: absolute; top: 50%; z-index: 2; width: 34px; height: 34px; margin-top: -14px; border-radius: 50%; border: 1px solid var(--border);
   display: none; align-items: center; justify-content: center; background: var(--card); color: var(--dark); box-shadow: var(--shadow-small); cursor: pointer;
@@ -838,3 +853,25 @@ button.size-card { font: inherit; color: inherit; text-align: left; cursor: poin
 @media (min-width: 640px) {
   .shop-tiles { flex-wrap: wrap; overflow: visible; }
 }
+
+/* ---- motion (19.11.2026) ------------------------------------------------------------------- */
+@keyframes slide-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* the card flip with a wind-up: a short lean the other way first (anticipation), then the turn */
+@keyframes flip-in { 0% { transform: rotateY(0); } 16% { transform: rotateY(-10deg) scale(.985); } 100% { transform: rotateY(180deg); } }
+@keyframes flip-out { 0% { transform: rotateY(180deg); } 16% { transform: rotateY(190deg) scale(.985); } 100% { transform: rotateY(0); } }
+.flip__inner.flip-in { animation: flip-in var(--t-flip) var(--ease); transition: none; }
+.flip__inner.flip-out { animation: flip-out var(--t-flip) var(--ease); transition: none; }
+/* a new piece arrives along an arc: sideways and up/down on different curves make a curve (principle 7) */
+@keyframes arc-x { from { translate: 46px 0; } to { translate: 0 0; } }
+@keyframes arc-y { 0% { transform: translateY(110px) scale(.7); opacity: .3; } 70% { opacity: 1; } 85% { transform: translateY(-4px) scale(1.02); } 100% { transform: none; } }
+.arrive { animation: arc-x .55s var(--ease) both, arc-y .55s var(--ease-in) both !important; z-index: 2; }
+/* the screen steps back while a sheet is open (staging) */
+.app-main { transition: transform var(--t-move) var(--ease), filter var(--t-move) var(--ease); transform-origin: 50% 0; }
+body.has-sheet .app-main { transform: scale(.965); filter: saturate(.85); }
+.sheet__drag { display: flex; flex-direction: column; gap: 14px; touch-action: none; cursor: grab; }
+/* while the stylist works: what is happening right now (Doherty threshold) */
+.wait-line { margin: 10px 0 0; display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--text-2); min-height: 22px; }
+.wait-line .spinner { width: 16px; height: 16px; border-width: 2px; flex-shrink: 0; }
+.wait-line--dark { color: var(--on-dark-2); }
+.wait-line--dark .spinner { border-color: rgba(244, 239, 231, .25); border-top-color: var(--on-dark); }
+.shop-more { flex: 0 0 auto; align-self: stretch; min-width: 96px; border-radius: 18px; border: 1.5px dashed #CFC3B2; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; font-weight: 600; padding: 0 14px; cursor: pointer; }
