@@ -410,7 +410,7 @@ describe("price search", () => {
     expect(out.offers.find((o) => o.store === "Shop C").oldPrice).toBe(null);
   });
 
-  it("searches each popular chain with its name, keeps only that chain's new offers, 2 each, the right type only", async () => {
+  it("searches each shop with its name, keeps only that shop's new offers of the right type: up to 5 each from two shops, 2 each from more", async () => {
     const shelf = {
       Zara: [
         { title: "Navy wool blazer", source: "ZARA Belgium", product_id: "z1", immersive_product_page_token: "eyJ6YXJhLTEiOiIxIn0=", extracted_price: 139 },
@@ -432,12 +432,16 @@ describe("price search", () => {
     // a chain is asked only for gender, colour and type: long queries with a chain name often find nothing
     expect(upstream.filter((c) => c.serp).map((c) => new URL(c.url).searchParams.get("q"))).toEqual(["Zara men navy blazer", "H&M men navy blazer"]);
     expect(out.offers.map((o) => [o.store, o.title, o.total])).toEqual([
+      ["Zara", "Slim blazer navy", 79.95],
       ["H&M", "Regular Fit wool-blend blazer", 89.99],
       ["Zara", "Textured blazer", 99.95],
       ["Zara", "Navy wool blazer", 139],
     ]);
     expect(out.searches).toBe(2);
     expect(e.USAGE.map.get(`${new Date().toISOString().slice(0, 7)}:all:search`)).toBe("2"); // two paid searches from the monthly budget
+    // three shops or more: 2 each, the first ones Google found
+    const three = await (await search({ query: "men navy wool blazer", country: "be", chains: ["zara", "hm", "uniqlo"], want: { name: "Тёмно-синий блейзер", kind: "blazer", color: "#1f2a44" } }, env({ SERPAPI_KEY: "k" }))).json();
+    expect(three.offers.filter((o) => o.store === "Zara").map((o) => o.title)).toEqual(["Textured blazer", "Navy wool blazer"]);
   });
 
   it("treats 'no results' as an empty answer, not as an error, and passes the sale filter", async () => {

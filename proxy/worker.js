@@ -865,15 +865,18 @@ For each piece: "item" = short Russian name in the form "colour + garment type" 
         const q = chainQuery(req);
         const found = await Promise.allSettled(chains.map((id) => googleShopping(env, `${CHAINS[id].name} ${q}`, req.country, { sale: req.sale, maxPrice: req.maxPrice })));
         if (found.every((f) => f.status === "rejected")) throw found[0].reason;
+        // With only the two marketplaces (the app's choice since 19.11.2026: Zalando and About You, two
+        // searches) each one may show up to 5 pieces; with more shops, 2 each.
+        const perChain = chains.length <= 2 ? 5 : PER_CHAIN;
         const own = found.flatMap((f, i) => (f.status === "fulfilled"
           ? normalizeOffers(f.value, { keepOrder: true })
             .filter((o) => o.condition === "new" && CHAINS[chains[i]].match.test(o.store))
-            .slice(0, 8) // Google's 8 most relevant per chain are enough to keep 2 after the check
+            .slice(0, perChain * 4) // Google's most relevant ones are enough to keep `perChain` after the check
             .map((o) => ({ ...o, chain: chains[i], store: CHAINS[chains[i]].name }))
           : []));
         const kept = await relevant(env, req, own);
         const taken = {};
-        offers = kept.filter((o) => (taken[o.chain] = (taken[o.chain] || 0) + 1) <= PER_CHAIN).sort((a, b) => a.total - b.total);
+        offers = kept.filter((o) => (taken[o.chain] = (taken[o.chain] || 0) + 1) <= perChain).sort((a, b) => a.total - b.total);
       } else {
         searches = 1;
         offers = await relevant(env, req, normalizeOffers(await googleShopping(env, req.query, req.country, { sale: req.sale, maxPrice: req.maxPrice })));

@@ -1,12 +1,12 @@
 // «Покупки» (design/V2-Shopping.dc.html) — the owner's main bet: dress well and save money.
 // 1. What the capsule is missing comes from the `gaps` task, with "+N образов" counted on the device.
-// 2. For the selected piece the `prices` task finds offers in the chosen country (Google Shopping via
-//    SerpApi), sorted by price with delivery, with a "best price" badge. «Популярные» (default) keeps
-//    only mass-market chains (src/lib/chains.js), at most 2 per chain and 10 in all. Tapping an offer
-//    asks the `offer` task for the product page on the shop's own site (Google's own product links
-//    often open empty); without it the link goes to the chain's search for that product.
-//    Each chain also gets a free search link on its own site. Until the owner adds the search key,
-//    the screen honestly falls back to those links.
+// 2. Shop tiles (free): Zalando, About You, SHEIN and the chains, each opening its own search already
+//    filtered where its address allows (size, cheapest first, sale, budget; src/lib/chains.js), with the
+//    filters written on the tile. «Сравнить цены на Zalando и About You» (default «Zalando · About You»)
+//    runs the paid `prices` task only when tapped — two searches (Google Shopping via SerpApi), up to 5
+//    offers per shop, sorted by price with delivery, with a "best price" badge. Tapping an offer asks the
+//    `offer` task for the product page on the shop's own site (Google's own product links often open
+//    empty); without it the link goes to the shop's search for that product.
 // 3. «Купил здесь» records a purchase; the saving vs the most expensive offer adds up for the month.
 // 4. «Мой размер»: the size for this kind of piece — the user's pick, else the size of the clothes
 //    they wear (items with a size and «впору»), else «Мерки и размеры» or an estimate from height and
@@ -14,7 +14,7 @@
 // 5. «Как сел размер?»: a few days after «Купил здесь» the app asks how the size fit and moves the
 //    saved size one step if it was too small or too big.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor, zalandoSearch } from "./lib/chains.js";
+import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, getPalette, inMonth, saveGapsCache } from "./lib/daily.js";
@@ -33,7 +33,9 @@ const WISH_CATEGORIES = [["jeans", "Джинсы"], ["trousers", "Брюки"], 
 const BUDGETS = [30, 50, 100, 0];
 const MOODS = [["basic", "Базовое, ко всему"], ["statement", "Что-то интереснее"], ["", "Как решит стилист"]];
 
-const FILTERS = [{ id: "chains", label: "Популярные" }, { id: "new", label: "Все новые" }, { id: "used", label: "Б/у" }];
+const FILTERS = [{ id: "chains", label: "Zalando · About You" }, { id: "new", label: "Все новые" }, { id: "used", label: "Б/у" }];
+// Shop tiles: a short mark in the shop's colour (letters, not logos).
+const BRAND = { zalando: ["Z", "#FF6900"], aboutyou: ["AY", "#1E1B18"], shein: ["S", "#1E1B18"], hm: ["H&M", "#E50010"], zara: ["Z", "#1E1B18"], uniqlo: ["U", "#E60012"], mango: ["M", "#1E1B18"], footlocker: ["FL", "#1E1B18"], newyorker: ["NY", "#1E1B18"] };
 const PRIORITY = { high: "в первую очередь", medium: "желательно", low: "по желанию" };
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -273,7 +275,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
   const list = useMemo(() => {
     const all = offers.data?.offers || [];
-    if (filter === "chains") return chainOffers(all);
+    if (filter === "chains") return chainOffers(all, { perChain: 5, max: 10 });
     const same = all.filter((o) => o.condition === filter).slice(0, 12);
     return filter === "new" ? shopOrder(same) : same; // second-hand stays cheapest first
   }, [offers.data, filter]);
@@ -367,12 +369,12 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   // Zalando's link carries the filters: the person's size, cheapest first, sale only and the budget.
   const linkCountry = country || "be";
   const linkFilters = { size: system && pick != null ? { system, pick } : null, sale: saleOnly, budget: wishes.budget || 0 };
-  const zalando = gap ? zalandoSearch(linkCountry, baseQuery, { gender, ...linkFilters }) : null;
+  // Shop tiles (free): each opens the shop's own search with the filters it understands, described on the tile.
   const links = filter === "used"
-    ? storeLinks(linkCountry).filter((s) => s.cond === "used").map((s) => ({ ...s, href: s.url(shownQuery) }))
+    ? storeLinks(linkCountry).filter((s) => s.cond === "used").map((s) => ({ ...s, href: s.url(shownQuery), notes: ["б/у", "поиск на сайте"] }))
     : [
-      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters }).map((c) => ({ ...c, cond: "new", href: c.url, note: c.own ? "Поиск прямо на сайте магазина" : "Поиск Google по сайту магазина" })),
-      ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery) })),
+      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters, money: (n) => money(n, currency) }).map((c) => ({ ...c, cond: "new", href: c.url })),
+      ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery), notes: ["все магазины сразу"] })),
     ];
 
   return (
@@ -491,23 +493,33 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             <span className="tiny-text">цена с доставкой</span>
           </div>
 
-          {zalando && filter !== "used" && (
-            <a className="zalando-card rise" href={zalando} target="_blank" rel="noopener noreferrer">
-              <span className="zalando-card__logo" aria-hidden="true">Z</span>
-              <span className="zalando-card__text">
-                <span className="strong-text">Открыть на Zalando — сразу отфильтровано</span>
-                <span className="tiny-text">{[size ? `твой размер ${size.value}` : "все размеры", "сначала дешёвые", saleOnly ? "только скидки" : "", wishes.budget ? `до ${money(wishes.budget, currency)}` : ""].filter(Boolean).join(" · ")}</span>
-              </span>
-              <Icon name="external" size={18} width={2} />
-            </a>
+          {links.length > 0 && (
+            <div className="shop-tiles-block">
+              <span className="tiny-text">{filter === "used" ? "Сайты б/у — бесплатно, сразу с поиском этой вещи" : "Магазины — бесплатно, откроются уже с твоими фильтрами"}</span>
+              <div className="shop-tiles" role="list" aria-label="Магазины">
+                {links.map((s, i) => {
+                  const [badge, color] = BRAND[s.id] || [s.name.replace(/[^A-Za-zА-Яа-я0-9]/g, "").slice(0, 2), "#574D44"];
+                  return (
+                    <a role="listitem" key={s.id} className={`shop-tile rise${s.id === "zalando" ? " is-main" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
+                      <span className="shop-tile__top">
+                        <span className="shop-tile__badge" style={{ background: color }} aria-hidden="true">{badge}</span>
+                        <Icon name="external" size={15} width={2} />
+                      </span>
+                      <span className="shop-tile__name">{s.name}</span>
+                      <span className="shop-tile__notes">{(s.notes || []).join(" · ")}</span>
+                    </a>
+                  );
+                })}
+              </div>
+            </div>
           )}
 
           {offers.status === "idle" && (
             <div className="price-cta">
               <button type="button" className="btn btn--dark btn--block" onClick={() => setAskedKey(searchKey)}>
-                <Icon name="bag" size={18} width={2} /> {mode === "chains" ? `Сравнить цены в ${searchChains(gap).length} магазинах` : "Найти цены во всех магазинах"}
+                <Icon name="bag" size={18} width={2} /> {mode === "chains" ? "Сравнить цены на Zalando и About You" : "Найти цены во всех магазинах"}
               </button>
-              <span className="tiny-text">{mode === "chains" ? `${searchChains(gap).length} поисков` : "1 поиск"} из общего лимита · ответ хранится сутки · ссылка Zalando выше — бесплатно</span>
+              <span className="tiny-text">{mode === "chains" ? `${searchChains(gap).length} поиска` : "1 поиск"} из общего лимита · ответ хранится сутки · магазины выше — бесплатно</span>
             </div>
           )}
 
@@ -554,7 +566,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                 {saleOnly
                   ? "Со скидкой такой вещи сейчас не нашлось. Выключи «Только со скидкой» или поищи прямо на сайтах."
                   : filter === "chains"
-                  ? "В популярных магазинах такой вещи не нашлось. Поищи прямо у них на сайте или посмотри «Все новые»."
+                  ? "На Zalando и About You такой вещи не нашлось. Открой магазины выше или посмотри «Все новые»."
                   : filter === "new" ? "Новых предложений нет — посмотри «Б/у» или сайты магазинов." : "Б/у предложений нет — поищи на сайтах ниже."}
               </p>
             )
@@ -564,28 +576,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
           {(offers.status === "off" || offers.status === "error" || offers.status === "done" || offers.status === "idle") && (
             <>
-              {(offers.status === "off" || offers.status === "error" || (offers.status === "done" && !list.length)) && (
-                <div className="offer-list">
-                  {links.map((s, i) => (
-                    <a key={s.id} className={`offer offer--link rise${i === 0 ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.06}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
-                      <span className="offer__icon"><GarmentIcon item={gap} size={38} /></span>
-                      <span className="offer__text">
-                        <span className="offer__title"><span className="strong-text">{s.name}</span><span className="tag tag--small">{s.cond === "new" ? "Новое" : "Б/у"}</span></span>
-                        <span className="tiny-text">{s.note}</span>
-                      </span>
-                      <span className="offer__go"><Icon name="external" size={18} width={2} /></span>
-                    </a>
-                  ))}
-                </div>
-              )}
-              {((offers.status === "done" && list.length > 0) || offers.status === "idle") && links.length > 0 && (
-                <div className="more-links">
-                  <span className="tiny-text">{filter === "used" ? "Поискать ещё:" : "Искать на сайтах:"}</span>
-                  {links.map((s) => <a key={s.id} className="filter-pill" href={s.href} target="_blank" rel="noopener noreferrer">{s.name}</a>)}
-                </div>
-              )}
               <p className="tiny-text center-text">
-                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" || offers.status === "idle" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · до 2 вещей из магазина" : ""}${saleOnly ? " · только скидки" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
+                {offers.status === "off" ? `Ищем «${shownQuery}». Сравнение цен с доставкой включится, когда владелец подключит поиск.` : offers.status === "done" || offers.status === "idle" ? `«${shownQuery}» · ${place.name}${filter === "chains" ? " · Zalando и About You" : ""}${saleOnly ? " · только скидки" : ""}${offers.data?.cached ? " · сохранено на сутки" : ""}` : `Ищем «${shownQuery}» по ссылкам.`}
               </p>
             </>
           )}
@@ -608,7 +600,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
             )}
             <label className="size-picker__switch">
               <input type="checkbox" checked={sizeOn} onChange={toggleSize} />
-              <span>Добавлять размер в поиск «Все новые» и «Б/у»<small>в «Популярных» размер выбирается на сайте магазина</small></span>
+              <span>Добавлять размер в поиск «Все новые» и «Б/у»<small>в «Zalando · About You» размер выбирается на сайте магазина</small></span>
             </label>
             {onOpenSizes && <button type="button" className="text-button" onClick={() => { setSizeOpen(false); onOpenSizes(); }}><Icon name="ruler" size={14} width={2} /> Посчитать по меркам</button>}
           </div>

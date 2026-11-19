@@ -34,6 +34,7 @@ export function BodyCapture({ onDone, onCancel }) {
   const audioRef = useRef(null);
   const voiceRef = useRef(true);
   const run = useRef(null);
+  const wakeRef = useRef(null);
   const [facing, setFacing] = useState("user");
   const [voice, setVoice] = useState(true);
   const [phase, setPhase] = useState("start"); // start → loading → front → side → review
@@ -61,18 +62,35 @@ export function BodyCapture({ onDone, onCancel }) {
     osc.start(); osc.stop(ctx.currentTime + ms / 1000);
   };
 
-  const stopCamera = () => {
+  // Only the camera: switching between front and back must not stop the joints loop (it did, so the
+  // back camera never recognised anyone).
+  const stopTracks = () => {
     for (const track of streamRef.current?.getTracks() || []) track.stop();
     streamRef.current = null;
+  };
+  // The camera and the loop: when the photos are taken or the screen closes.
+  const stopCamera = () => {
+    stopTracks();
     if (run.current) run.current.stopped = true;
+    wakeRef.current?.release?.().catch(() => {});
+    wakeRef.current = null;
+  };
+  // The screen must not dim while the person steps back from the phone (Screen Wake Lock; where the
+  // browser has none, the phone's own auto-lock applies).
+  const keepAwake = async () => {
+    try { wakeRef.current = (await navigator.wakeLock?.request("screen")) || null; } catch { /* not supported */ }
   };
 
   // everything stops when the screen closes
   useEffect(() => {
     const onTilt = (e) => { tiltRef.current = e.beta == null ? null : { beta: e.beta, gamma: e.gamma }; };
+    // the wake lock ends when the page is hidden; take it again when it is back
+    const onVisible = () => { if (document.visibilityState === "visible" && streamRef.current && (!wakeRef.current || wakeRef.current.released)) keepAwake(); };
     window.addEventListener("deviceorientation", onTilt);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.removeEventListener("deviceorientation", onTilt);
+      document.removeEventListener("visibilitychange", onVisible);
       stopCamera();
       window.speechSynthesis?.cancel();
       audioRef.current?.close?.().catch(() => {});
@@ -81,15 +99,30 @@ export function BodyCapture({ onDone, onCancel }) {
 
   useEffect(() => () => { if (shots?.urls) Object.values(shots.urls).forEach((u) => u && URL.revokeObjectURL(u)); }, [shots]);
 
+  // A tall picture for a standing person. Asking for 1920×1920 gave a square crop on phones, so the
+  // person had to step far back. Phones read width/height differently, so a few sizes are tried in turn
+  // and the first tall one is kept (on a computer a wide picture is fine).
   const startCamera = async (which = facing) => {
     setError("");
-    stopCamera();
+    stopTracks();
+    const video = videoRef.current;
+    const portrait = window.innerHeight >= window.innerWidth;
+    const sizes = portrait
+      ? [{ width: { ideal: 1080 }, height: { ideal: 1920 }, aspectRatio: { ideal: 9 / 16 } }, { width: { ideal: 1920 }, height: { ideal: 1080 } }, { width: { ideal: 1280 }, height: { ideal: 720 } }]
+      : [{ width: { ideal: 1920 }, height: { ideal: 1080 } }];
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: which, width: { ideal: 1920 }, height: { ideal: 1920 } } });
-      streamRef.current = stream;
-      const video = videoRef.current;
-      video.srcObject = stream;
-      await video.play();
+      let best = null;
+      for (const size of sizes) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: which, ...size } });
+        video.srcObject = stream;
+        await video.play();
+        if (!video.videoWidth) await new Promise((r) => { video.onloadedmetadata = r; setTimeout(r, 1500); });
+        const tall = video.videoHeight / Math.max(1, video.videoWidth);
+        if (!portrait || tall >= 1.3) { if (best) best.stream.getTracks().forEach((t) => t.stop()); best = { stream, tall }; break; }
+        if (!best || tall > best.tall) { if (best) best.stream.getTracks().forEach((t) => t.stop()); best = { stream, tall }; } else stream.getTracks().forEach((t) => t.stop());
+      }
+      if (video.srcObject !== best.stream) { video.srcObject = best.stream; await video.play(); }
+      streamRef.current = best.stream;
       return true;
     } catch (e) {
       setError(e?.name === "NotAllowedError"
@@ -101,13 +134,17 @@ export function BodyCapture({ onDone, onCancel }) {
   };
 
   // The first tap: sound and voice need a tap to start on phones, and iPhone asks for the tilt sensor.
-  const begin = async () => {
+  // `which`: "user" — the person films themselves with the front camera; "environment" — someone else
+  // holds the phone and films with the back camera.
+  const begin = async (which = facing) => {
+    setFacing(which);
     try { audioRef.current ??= new (window.AudioContext || window.webkitAudioContext)(); } catch { /* no sound */ }
     try { await window.DeviceOrientationEvent?.requestPermission?.(); } catch { /* no tilt check */ }
-    say("Поставь телефон вертикально на уровне пояса и отойди на два-три шага");
+    say(which === "user" ? "Поставь телефон вертикально на уровне пояса и отойди на два-три шага" : "Держи телефон вертикально на уровне пояса, в двух-трёх шагах");
     setPhase("loading");
-    const [ok, landmarker] = await Promise.all([startCamera(), loadLiveLandmarker().catch(() => null)]);
+    const [ok, landmarker] = await Promise.all([startCamera(which), loadLiveLandmarker().catch(() => null)]);
     if (!ok) return;
+    keepAwake();
     if (!landmarker) { stopCamera(); setError("Не получилось загрузить распознавание фигуры. Проверь интернет и попробуй ещё раз."); setPhase("start"); return; }
     run.current = { landmarker, view: "front", history: [], countdownAt: 0, shown: 0, forced: false, burst: [], full: null, front: null, pending: { id: "", since: 0 }, spoken: { id: "", at: 0 }, grace: performance.now() + 2500, last: 0, stopped: false };
     setPhase("front");
@@ -116,13 +153,16 @@ export function BodyCapture({ onDone, onCancel }) {
   const switchCamera = async () => {
     const next = facing === "user" ? "environment" : "user";
     setFacing(next);
+    if (run.current) { run.current.history = []; run.current.countdownAt = 0; run.current.grace = performance.now() + 1500; }
+    setCount(0);
     await startCamera(next);
   };
 
   // The loop: joints → checks → hint, countdown, burst.
   useEffect(() => {
     if (phase !== "front" && phase !== "side") return undefined;
-    let raf = 0;
+    // a timer, not animation frames: frames stop whenever the page is not drawn, a timer keeps going
+    let timer = 0;
     const draw = (lm, W, H) => {
       const canvas = overlayRef.current;
       if (!canvas) return;
@@ -157,10 +197,11 @@ export function BodyCapture({ onDone, onCancel }) {
         .catch(() => setShots(result));
       setPhase("review");
     };
-    const tick = (now) => {
-      raf = requestAnimationFrame(tick);
+    const tick = () => {
+      timer = setTimeout(tick, 100);
+      const now = performance.now();
       const r = run.current; const video = videoRef.current;
-      if (!r || r.stopped || !video || video.readyState < 2 || now - r.last < 100) return;
+      if (!r || r.stopped || !video || video.readyState < 2 || now - r.last < 90) return;
       r.last = now;
       if (r.capturing) {
         r.burst.push(frameOf(video, MEASURE_SIDE));
@@ -196,8 +237,8 @@ export function BodyCapture({ onDone, onCancel }) {
         r.spoken = { id: check.id, at: now };
       }
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    timer = setTimeout(tick, 100);
+    return () => clearTimeout(timer);
   }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The shutter by hand: for someone helping, or when the checks keep complaining.
@@ -209,7 +250,7 @@ export function BodyCapture({ onDone, onCancel }) {
 
   const retake = () => {
     setShots(null);
-    begin();
+    begin(facing);
   };
 
   const mirrored = facing === "user";
@@ -236,7 +277,9 @@ export function BodyCapture({ onDone, onCancel }) {
           </ol>
           <p className="tiny-text">Облегающая одежда, без обуви. Кадры обрабатываются на телефоне и не сохраняются.</p>
           {error && <p className="status-line status-line--error">{error}</p>}
-          <button type="button" className="btn btn--light btn--block btn--tall" onClick={begin}><Icon name="camera" size={20} width={2} /> Включить камеру</button>
+          <button type="button" className="btn btn--light btn--block btn--tall" onClick={() => begin("user")}><Icon name="camera" size={20} width={2} /> Снимаю себя сам</button>
+          <button type="button" className="btn btn--outline-light btn--block" onClick={() => begin("environment")}><Icon name="person" size={18} width={2} /> Меня снимает другой человек</button>
+          <p className="tiny-text">Второй вариант — задняя камера, она чётче. Подсказки слышны вам обоим.</p>
         </div>
       )}
 

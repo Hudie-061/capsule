@@ -143,7 +143,6 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const outdoor = pieces.filter((p) => isOutdoorLayer(p, pieces));
   const shown = indoor ? pieces.filter((p) => !outdoor.includes(p)) : pieces;
   const shownKey = shown.map((p) => p.id).join("+");
-  const missingOuter = Boolean(outfit) && !pieces.some(isOuter) && pieces.some((p) => p.part === "upperbody") && items.some(isOuter);
 
   useEffect(() => { getTiming().then((t) => setMode(defaultMode(t))); }, []);
   useEffect(() => { getProfile().then((p) => setFigure({ gender: p.gender, height: p.height, weight: p.weight })); }, []);
@@ -268,7 +267,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     const current = swapId;
     setSwapId(null);
     if (!plan || !outfit || !current || current === itemId) return;
-    const outfits = plan.outfits.map((o, i) => (i === plan.index ? { ...o, itemIds: o.itemIds.map((id) => (id === current ? itemId : id)), edited: true } : o));
+    const outfits = plan.outfits.map((o, i) => (i === plan.index ? { ...o, itemIds: [...new Set(o.itemIds.map((id) => (id === current ? itemId : id)))], edited: true } : o));
     await store({ ...plan, outfits, chosen: null });
     setLikeAt(null);
   };
@@ -306,11 +305,26 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   };
 
   const swapping = swapId ? byId.get(swapId) : null;
+  // Pieces of the same category that are not in the outfit yet: picking one already worn (a bracelet
+  // next to the watch) only duplicated it, so the watch just disappeared.
   const alternatives = useMemo(() => {
     if (!swapping) return [];
-    const same = items.filter((i) => i.part === swapping.part && isDressItem(i) === isDressItem(swapping));
-    return [swapping, ...same.filter((i) => i.id !== swapping.id)];
-  }, [swapping, items]);
+    const worn = new Set(outfit?.itemIds || []);
+    const same = items.filter((i) => i.part === swapping.part && isDressItem(i) === isDressItem(swapping) && !worn.has(i.id));
+    return [swapping, ...same];
+  }, [swapping, items, outfit]);
+
+  // «＋ Добавить»: outerwear when there is none, any accessory not worn yet, shoes when there are none.
+  const addGroups = useMemo(() => {
+    if (!outfit) return [];
+    const worn = new Set(outfit.itemIds);
+    const free = (p) => !worn.has(p.id);
+    return [
+      { id: "outer", label: "Верхняя одежда", items: !pieces.some(isOuter) && pieces.some((p) => p.part === "upperbody") ? items.filter((p) => isOuter(p) && free(p)) : [] },
+      { id: "accessories", label: "Аксессуары", items: items.filter((p) => p.part === "accessories_up" && free(p)) },
+      { id: "shoes", label: "Обувь", items: !pieces.some((p) => p.part === "shoes") ? items.filter((p) => p.part === "shoes" && free(p)) : [] },
+    ].filter((g) => g.items.length);
+  }, [outfit, pieces, items]);
 
   const tags = [
     ...(plan?.occasion ? plan.occasion.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 2) : [formatDay(date || new Date()).split(",")[0]]),
@@ -393,7 +407,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                 <Icon name="person" size={20} width={1.9} /> На человеке
               </button>
             </div>
-            <div className="look-tiles" data-count={pieces.length + (missingOuter ? 1 : 0)}>
+            <div className="look-tiles" data-count={pieces.length + (addGroups.length ? 1 : 0)}>
               {pieces.map((p, i) => (
                 <button type="button" key={p.id} className="look-tile rise" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => setSwapId(p.id)} aria-label={`Заменить: ${p.name}`}>
                   {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
@@ -401,10 +415,10 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                   <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>
                 </button>
               ))}
-              {missingOuter && (
-                <button type="button" className="look-tile look-tile--add rise" onClick={() => setAdding(true)} aria-label="Добавить верхнюю одежду">
+              {addGroups.length > 0 && (
+                <button type="button" className="look-tile look-tile--add rise" onClick={() => setAdding(true)} aria-label={`Добавить в образ: ${addGroups.map((g) => g.label.toLowerCase()).join(", ")}`}>
                   <Icon name="plus" size={28} width={1.6} />
-                  <span className="look-tile__name">Верхняя одежда</span>
+                  <span className="look-tile__name">{addGroups.length === 1 ? addGroups[0].label : "Добавить"}</span>
                 </button>
               )}
             </div>
@@ -525,7 +539,11 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             );
           })}
         </div>
-        {alternatives.length < 2 && <p className="muted-text">Других вещей этой категории пока нет. Добавь их кнопкой «＋» или найди новую.</p>}
+        {alternatives.length < 2 && (
+          <p className="muted-text">{pieces.some((p) => p.id !== swapping?.id && p.part === swapping?.part)
+            ? "Остальные вещи этой категории уже в образе. Новую можно добавить кнопкой «＋» в гардеробе или найти в «Покупках»."
+            : "Других вещей этой категории пока нет. Добавь их кнопкой «＋» или найди новую."}</p>
+        )}
         {/* Not a copy of this piece: the stylist suggests different ones that suit the rest of the outfit. */}
         <button type="button" className="dark-link" onClick={() => {
           const piece = swapping;
@@ -539,15 +557,20 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
         </button>
       </Sheet>
 
-      <Sheet open={adding} onClose={() => setAdding(false)} title="Добавить верхнюю одежду" subtitle="Из твоего гардероба">
-        <div className="alt-grid">
-          {items.filter(isOuter).map((alt, i) => (
-            <button type="button" key={alt.id} className="alt-card rise" style={{ animationDelay: `${i * 0.04}s` }} onClick={() => addPiece(alt.id)}>
-              <span className="alt-card__image">{alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}</span>
-              <span className="alt-card__text"><span className="strong-text">{alt.name}</span><span className="tiny-text">{[alt.brand, ...(alt.tags || []).slice(0, 2)].filter(Boolean).join(" · ") || " "}</span></span>
-            </button>
-          ))}
-        </div>
+      <Sheet open={adding} onClose={() => setAdding(false)} title="Добавить в образ" subtitle="Из твоего гардероба">
+        {addGroups.map((group) => (
+          <div className="add-group" key={group.id}>
+            <span className="section-label">{group.label}</span>
+            <div className="alt-grid">
+              {group.items.map((alt, i) => (
+                <button type="button" key={alt.id} className="alt-card rise" style={{ animationDelay: `${i * 0.04}s` }} onClick={() => addPiece(alt.id)}>
+                  <span className="alt-card__image">{alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}</span>
+                  <span className="alt-card__text"><span className="strong-text">{alt.name}</span><span className="tiny-text">{[alt.brand, ...(alt.tags || []).slice(0, 2)].filter(Boolean).join(" · ") || " "}</span></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
       </Sheet>
 
       <Sheet open={dislikeOpen} onClose={() => setDislikeOpen(false)} title="Почему не этот?" subtitle="Один тап — и стилист учтёт это в следующих образах">

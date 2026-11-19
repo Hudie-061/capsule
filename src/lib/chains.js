@@ -57,6 +57,23 @@ function hmLink(c, s, g, { size = null } = {}) {
 // Google search inside the country's About You site. Its offers come from the price search like the rest.
 const ABOUTYOU = { be: "aboutyou.be", nl: "aboutyou.nl", de: "aboutyou.de", at: "aboutyou.at", pl: "aboutyou.pl", es: "aboutyou.es", it: "aboutyou.it", pt: "aboutyou.pt", ie: "aboutyou.ie", lu: "aboutyou.lu" };
 
+// SHEIN (added at the owner's request, 19.11.2026): its search page m.shein.com/<site>/pdsearch/<query>/ —
+// the query already says gender, colour and type in English ("women white t-shirt"), which is what the
+// owner sets by hand there. Belgium uses the EU site (euqs, the address the owner sent). Sizes are SHEIN's
+// own attribute codes (size = attribute 87); only M is known so far, from the owner's link (87_417) —
+// the other sizes go here when their codes are known. SHEIN blocks automated browsers with a captcha,
+// so these links were not opened here: the owner checks them on the phone.
+const SHEIN = { be: "euqs", lu: "euqs", at: "euqs", ie: "euqs", pt: "euqs", nl: "nl", fr: "fr", de: "de", es: "es", it: "it", pl: "pl", us: "us" };
+const SHEIN_SIZES = { M: "87_417" };
+function sheinLink(c, s, g, { size = null } = {}) {
+  const base = c === "gb" ? "https://m.shein.co.uk" : `https://m.shein.com/${SHEIN[c] || "euqs"}`;
+  const code = size?.system === "letter" ? SHEIN_SIZES[size.pick] : null;
+  // SHEIN has no men/women section in a search address, so the gender goes into the words
+  const words = [g === "female" ? "women" : g === "male" ? "men" : "", s].filter(Boolean).join(" ");
+  return `${base}/pdsearch/${q(words)}/${code ? `?attr_ids=${code}` : ""}`;
+}
+const sheinHasSize = (size) => Boolean(size?.system === "letter" && SHEIN_SIZES[size.pick]);
+
 // `match` is tested against the shop name Google Shopping gives (`source`).
 // `own` = shown as a search link; the rest only count as popular when they appear in offers.
 export const CHAINS = [
@@ -72,6 +89,8 @@ export const CHAINS = [
     search: zalandoLink },
   // The other big fashion marketplace in Belgium, the Netherlands and Germany.
   { id: "aboutyou", name: "About You", match: /about\s*you/i, site: "aboutyou.com", sites: ABOUTYOU, own: true, search: () => null },
+  // A huge cheap catalogue; a free link only (no price search).
+  { id: "shein", name: "SHEIN", match: /shein/i, site: "shein.com", own: true, search: sheinLink },
   { id: "newyorker", name: "New Yorker", match: /new\s*yorker/i, site: "newyorker.de", own: true, search: () => null },
   { id: "footlocker", name: "Foot Locker", match: /foot\s*locker/i, site: "footlocker.com", own: true, shoes: true,
     search: (c, s) => (c === "us" ? `https://www.footlocker.com/search?query=${q(s)}&sort=price-asc` : FOOTLOCKER[c] ? `https://www.${FOOTLOCKER[c]}/search?query=${q(s)}&sort=price-asc` : null) },
@@ -83,14 +102,11 @@ export const CHAINS = [
   { id: "jd", name: "JD Sports", match: /^jd(\s*sports)?\b/i, site: "jdsports.com", shoes: true },
 ];
 
-// Shops searched one by one in «Популярные» (one paid search each, five at most; ids match the Worker).
-// The two marketplaces always (Zalando, About You: many brands, unusual pieces, Black Friday deals),
-// then the chains that are strongest for this kind of piece.
-const BASICS = new Set(["t-shirt", "shirt", "hoodie", "sweater"]);
-export function searchChains(gap) {
-  if (gap?.part === "shoes") return ["zalando", "aboutyou", "footlocker", "zara", "hm"];
-  if (BASICS.has(kindOf(gap || {}))) return ["zalando", "aboutyou", "uniqlo", "hm", "zara"];
-  return ["zalando", "aboutyou", "zara", "hm", "mango"];
+// Shops whose prices «Сравнить цены» searches (one paid search each; ids match the Worker). Since
+// 19.11.2026 only the two marketplaces — Zalando and About You, two searches instead of five; every other
+// shop is a free link tile that opens its own search with the filters it understands.
+export function searchChains() {
+  return ["zalando", "aboutyou"];
 }
 
 export const chainOf = (store) => CHAINS.find((c) => c.match.test(String(store || "").trim())) || null;
@@ -137,15 +153,30 @@ export function zalandoSearch(country, query, { gender = "", size = null, sale =
 }
 
 // Search links for the chains that suit this piece: shoe chains only for shoes.
-export function chainLinks(country, query, { shoes = false, gender = "", filters = {} } = {}) {
+// What each shop link does, in a few words for its tile («твой размер M · сначала дешёвые»): only the
+// filters that shop's address really carries (see the notes above each link builder).
+function linkNotes(id, own, { size = null, sale = false, budget = 0 } = {}, g = "", money = (n) => `${n}`) {
+  if (!own) return ["поиск Google по сайту"];
+  const sizeLabel = size?.pick == null ? "" : size.system === "wl" ? `W${size.pick.w} L${size.pick.l}` : `${size.pick}`;
+  const sex = g === "female" ? "женское" : g === "male" ? "мужское" : "";
+  if (id === "zalando") return [sizeLabel ? `твой размер ${sizeLabel}` : "все размеры", "сначала дешёвые", sale ? "только скидки" : "", budget ? `до ${money(budget)}` : ""];
+  if (id === "hm") return [size?.system === "letter" && sex ? `размер ${sizeLabel}` : "", "сначала дешёвые"];
+  if (id === "uniqlo" || id === "footlocker") return ["сначала дешёвые"];
+  if (id === "shein") return [sex, sheinHasSize(size) ? `размер ${sizeLabel}` : "размер — на сайте", "цвет и тип в поиске"];
+  return [sex, "поиск на сайте"];
+}
+
+// The shop tiles in «Покупки»: every shop's own search with the filters it understands (free).
+// Zalando, About You and SHEIN first (the marketplaces), shoe chains for shoes, then the chains.
+// `money` formats the budget in the country's currency for the tile.
+export function chainLinks(country, query, { shoes = false, gender = "", filters = {}, money } = {}) {
   const s = shopQuery(query);
   const g = queryGender(query, gender);
   const list = CHAINS.filter((c) => c.own && (!c.shoes || shoes));
-  // Zalando and About You first (Black Friday), then shoe chains for shoes, then the rest.
-  const rank = (c) => (c.id === "zalando" ? 0 : c.id === "aboutyou" ? 1 : c.shoes ? 2 : 3);
+  const rank = (c) => (c.id === "zalando" ? 0 : c.id === "aboutyou" ? 1 : c.id === "shein" ? 2 : c.shoes ? 3 : 4);
   return [...list].sort((a, b) => rank(a) - rank(b)).map((c) => {
     const own = c.search?.(country, s, g, filters) || "";
-    return { id: c.id, name: c.name, url: own || googleInside(c, country, s), own: Boolean(own) };
+    return { id: c.id, name: c.name, url: own || googleInside(c, country, s), own: Boolean(own), notes: linkNotes(c.id, Boolean(own), filters, g, money).filter(Boolean) };
   });
 }
 

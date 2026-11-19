@@ -44,10 +44,9 @@ describe("popular chains", () => {
     expect(chainLinks("pl", "jeans").find((l) => l.id === "uniqlo")).toMatchObject({ own: false });
   });
 
-  it("searches Zalando, About You and the chains that suit the piece, five shops at most", () => {
-    expect(searchChains({ part: "shoes", kind: "sneakers" })).toEqual(["zalando", "aboutyou", "footlocker", "zara", "hm"]);
-    expect(searchChains({ part: "upperbody", kind: "t-shirt" })).toEqual(["zalando", "aboutyou", "uniqlo", "hm", "zara"]);
-    expect(searchChains({ part: "wholebody_up", kind: "blazer" })).toEqual(["zalando", "aboutyou", "zara", "hm", "mango"]);
+  it("compares prices on Zalando and About You only: two searches", () => {
+    expect(searchChains({ part: "shoes", kind: "sneakers" })).toEqual(["zalando", "aboutyou"]);
+    expect(searchChains({ part: "wholebody_up", kind: "blazer" })).toEqual(["zalando", "aboutyou"]);
     expect(chainOf("nl.zalando.be")?.id).toBe("zalando");
     expect(chainLinks("be", "men navy blazer").find((l) => l.id === "zalando").url).toBe("https://www.zalando.be/heren/?q=navy+blazer&order=price&dir=asc");
   });
@@ -58,7 +57,25 @@ describe("popular chains", () => {
     ]);
     expect(list.map((o) => [o.store, o.total])).toEqual([["nl.zalando.be", 50], ["nl.zalando.be", 60], ["Uniqlo", 25], ["Zara", 30], ["H&M", 20]]);
     expect(chainLinks("be", "men navy blazer")[0].id).toBe("zalando");
-    expect(chainLinks("be", "white sneakers", { shoes: true }).map((l) => l.id).slice(0, 3)).toEqual(["zalando", "aboutyou", "footlocker"]);
+    expect(chainLinks("be", "white sneakers", { shoes: true }).map((l) => l.id).slice(0, 4)).toEqual(["zalando", "aboutyou", "shein", "footlocker"]);
+  });
+
+  it("opens SHEIN's search with gender, colour and type in the words, and size M as SHEIN's filter code", () => {
+    const shein = (query, filters = {}, country = "be") => chainLinks(country, query, { filters }).find((l) => l.id === "shein");
+    expect(shein("women white t-shirt").url).toBe("https://m.shein.com/euqs/pdsearch/women%20white%20t-shirt/");
+    expect(shein("women white t-shirt", { size: { system: "letter", pick: "M" } }).url).toBe("https://m.shein.com/euqs/pdsearch/women%20white%20t-shirt/?attr_ids=87_417");
+    expect(shein("men black jeans", { size: { system: "wl", pick: { w: 32, l: 32 } } }, "nl").url).toBe("https://m.shein.com/nl/pdsearch/men%20black%20jeans/");
+    // the tile says what the link does: no size code known for L yet
+    expect(shein("women white t-shirt", { size: { system: "letter", pick: "L" } }).notes).toEqual(["женское", "размер — на сайте", "цвет и тип в поиске"]);
+    expect(shein("women white t-shirt", { size: { system: "letter", pick: "M" } }).notes).toContain("размер M");
+  });
+
+  it("describes each shop tile by the filters its link really carries", () => {
+    const tiles = Object.fromEntries(chainLinks("be", "men grey hoodie", { filters: { size: { system: "letter", pick: "L" }, sale: true, budget: 50 }, money: (n) => `${n} €` }).map((l) => [l.id, l.notes]));
+    expect(tiles.zalando).toEqual(["твой размер L", "сначала дешёвые", "только скидки", "до 50 €"]);
+    expect(tiles.hm).toEqual(["размер L", "сначала дешёвые"]);
+    expect(tiles.aboutyou).toEqual(["поиск Google по сайту"]);
+    expect(tiles.zara).toEqual(["мужское", "поиск на сайте"]);
   });
 
   it("puts the size and cheapest-first into the other shops' links where they support it", () => {
