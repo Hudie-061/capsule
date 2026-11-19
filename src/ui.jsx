@@ -1,6 +1,6 @@
 // Small shared pieces of the v2 design: icons, garment silhouettes, the sliding toggle
 // and the bottom sheet. Shapes and sizes follow design/V2-*.dc.html.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { kindOf } from "./lib/kinds.js";
 
@@ -102,9 +102,19 @@ export function GarmentIcon({ item, part, color, size = 48, dress = false, outli
 export function Segmented({ options, value, onChange, label, tone = "light", className = "", role = "group" }) {
   const index = Math.max(0, options.findIndex((o) => o.id === value));
   const isTabs = role === "tablist";
+  // the knob stretches 12 % while it travels to the new option
+  const [moving, setMoving] = useState(false);
+  const last = useRef(index);
+  useEffect(() => {
+    if (last.current === index) return undefined;
+    last.current = index;
+    setMoving(true);
+    const timer = setTimeout(() => setMoving(false), 360);
+    return () => clearTimeout(timer);
+  }, [index]);
   return (
     <div className={`segmented segmented--${tone} ${className}`} role={role} aria-label={label} style={{ "--count": options.length, "--index": index }}>
-      <span className="segmented__thumb" aria-hidden="true" />
+      <span className={`segmented__thumb${moving ? " is-moving" : ""}`} aria-hidden="true" />
       {options.map((o) => (
         <button
           key={o.id}
@@ -149,7 +159,12 @@ export function Sheet({ open, onClose, title, subtitle, children, className = ""
     dragFrom.current = e.clientY;
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
-  const dragMove = (e) => { if (dragFrom.current !== null) setDrag(Math.max(0, e.clientY - dragFrom.current)); };
+  // down: follows the finger; up: a rubber band that gives a little, harder and harder, then snaps back
+  const dragMove = (e) => {
+    if (dragFrom.current === null) return;
+    const dy = e.clientY - dragFrom.current;
+    setDrag(dy >= 0 ? dy : -Math.min(36, Math.sqrt(-dy) * 3));
+  };
   const dragEnd = () => {
     if (dragFrom.current === null) return;
     dragFrom.current = null;
@@ -165,7 +180,7 @@ export function Sheet({ open, onClose, title, subtitle, children, className = ""
       return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
     }
     setShown(false);
-    const timer = setTimeout(() => setMounted(false), 420);
+    const timer = setTimeout(() => setMounted(false), 340); // the exit is 20 % shorter than the entrance
     return () => clearTimeout(timer);
   }, [open]);
 
@@ -179,7 +194,7 @@ export function Sheet({ open, onClose, title, subtitle, children, className = ""
   if (!mounted) return null;
   return createPortal(
     <div className={`sheet-layer${shown ? " is-open" : ""}`}>
-      <div className="sheet-backdrop" onClick={onClose} style={drag ? { opacity: Math.max(0.2, 1 - drag / 400) } : undefined} />
+      <div className="sheet-backdrop" onClick={onClose} style={drag > 0 ? { opacity: Math.max(0.2, 1 - drag / 400) } : undefined} />
       <div className={`sheet ${className}`} role="dialog" aria-modal="true" aria-label={title} style={drag ? { transform: `translateY(${drag}px)`, transition: "none" } : undefined}>
         <div className="sheet__drag" onPointerDown={dragStart} onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd}>
           <div className="sheet__grip" aria-hidden="true" />
@@ -225,22 +240,72 @@ export function Spinner({ label }) {
 // tips: [{ title, why }] (or { label, value, why } for palette traits).
 export function HintChips({ tips, tone = "light", label = "Почему так" }) {
   const [open, setOpen] = useState(-1);
+  const [leaving, setLeaving] = useState(null); // the note on its way back into its chip: { index, arrow }
+  const [arrow, setArrow] = useState(24); // where the note's arrow (and its growth) starts: under the chip
+  const chips = useRef([]);
   const list = (tips || []).filter((t) => t && t.why && (t.title || t.label));
   const signature = list.map((t) => `${t.title || t.label}:${t.why}`).join("|");
-  useEffect(() => setOpen(-1), [signature]); // another outfit or palette closes the open note
+  useEffect(() => { setOpen(-1); setLeaving(null); }, [signature]); // another outfit or palette closes the open note
   if (!list.length) return null;
-  const tip = list[open];
+  const arrowOf = (i) => { const b = chips.current[i]; return b ? Math.round(b.offsetLeft + Math.min(b.offsetWidth / 2, 28)) : 24; };
+  const toggle = (i) => {
+    if (open === i) { setLeaving({ index: i, arrow }); setOpen(-1); return; }
+    setLeaving(null);
+    setArrow(arrowOf(i));
+    setOpen(i);
+  };
+  const shown = open >= 0 ? { index: open, arrow, leaving: false } : leaving ? { ...leaving, leaving: true } : null;
   return (
     <div className={`hint-chips hint-chips--${tone}`}>
       <div className="hint-chips__row" role="group" aria-label={label}>
         {list.map((t, i) => (
-          <button type="button" key={`${t.title || t.label}-${i}`} className={`hint-chip${open === i ? " is-on" : ""}`} aria-expanded={open === i} onClick={() => setOpen(open === i ? -1 : i)}>
+          <button type="button" key={`${t.title || t.label}-${i}`} ref={(el) => { chips.current[i] = el; }} className={`hint-chip${open === i ? " is-on" : ""}`} aria-expanded={open === i} onClick={() => toggle(i)}>
             <Icon name="star" size={12} width={2.2} />
             {t.title || <>{t.label}: <b>{t.value}</b></>}
           </button>
         ))}
       </div>
-      {tip && <p className="hint-bubble pop" role="status" key={open}>{tip.why}</p>}
+      {shown && list[shown.index] && (
+        <p className={`hint-bubble${shown.leaving ? " is-leaving" : ""}`} role="status" key={`${shown.index}-${shown.leaving}`} style={{ "--arrow": `${shown.arrow}px` }}
+          onAnimationEnd={() => { if (shown.leaving) setLeaving(null); }}>{list[shown.index].why}</p>
+      )}
+    </div>
+  );
+}
+
+// An icon that changes (a plus becomes a check, a bell becomes a cross) melts into the next one: both are
+// drawn on the same spot and cross-fade with a little blur, instead of one icon jumping into another.
+export function SwapIcon({ name, size = 16, width = 2 }) {
+  const [shown, setShown] = useState([name]);
+  useEffect(() => {
+    setShown((list) => (list[list.length - 1] === name ? list : [...list.filter((n) => n !== name), name].slice(-2)));
+  }, [name]);
+  return (
+    <span className="swap-icon" aria-hidden="true">
+      {shown.map((n) => <span key={n} className={n === name ? "" : "is-off"}><Icon name={n} size={size} width={width} /></span>)}
+    </span>
+  );
+}
+
+// Old and new content at the same time: when `k` changes (another outfit, another picture), the previous
+// content stays on top for a moment and fades out while the new one fades in, with no empty frame between.
+export function Crossfade({ k, children, className = "" }) {
+  const prev = useRef({ k, children });
+  const timer = useRef(0);
+  const [ghost, setGhost] = useState(null);
+  useLayoutEffect(() => {
+    if (prev.current.k !== k) {
+      setGhost({ k: prev.current.k, children: prev.current.children });
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setGhost(null), 260);
+    }
+    prev.current = { k, children };
+  });
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (
+    <div className={`xfade ${className}`}>
+      {ghost && <div className="xfade__old" aria-hidden="true" inert="" key={`old-${ghost.k}`}>{ghost.children}</div>}
+      <div className={ghost ? "xfade__new" : ""} key={`new-${k}`}>{children}</div>
     </div>
   );
 }

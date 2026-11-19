@@ -53,6 +53,26 @@ async function storyImage(p) {
 
 const SELFIE = "palette-selfie";
 
+// The colour around the face changes like fabric being raised: the new colour spreads in a circle from
+// below over the old one (a mask reveal) instead of one ring simply switching to another. The clothes on
+// the sticker face take the same colour through --drape.
+function DrapeFace({ color, children }) {
+  const [rings, setRings] = useState([{ color, id: 0 }]);
+  const nextId = useRef(1);
+  useEffect(() => {
+    setRings((list) => (list[list.length - 1].color === color ? list : [...list.slice(-1), { color, id: nextId.current++ }]));
+  }, [color]);
+  return (
+    <span className="drape__frame" style={{ "--drape": color }}>
+      {rings.map((r, i) => (
+        <span key={r.id} className={`drape__ring${i > 0 ? " is-new" : ""}`} style={{ background: r.color }}
+          onAnimationEnd={() => setRings((list) => list.slice(-1))} aria-hidden="true" />
+      ))}
+      <span className="drape__face">{children}</span>
+    </span>
+  );
+}
+
 // A 512 px JPEG is plenty for a circle on screen.
 async function smallSelfie(file) {
   const bitmap = await loadBitmap(file);
@@ -252,12 +272,12 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               {/* the selfie when there is one, otherwise a sticker face of the person's gender */}
               <div className="drape-row" aria-label={selfie ? "Цвета рядом с лицом" : "Цвета рядом с лицом, пример"}>
                 <figure className="drape">
-                  <span className="drape__face" style={{ "--drape": p.best[drape.best]?.hex }}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</span>
+                  <DrapeFace color={p.best[drape.best]?.hex}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</DrapeFace>
                   <figcaption><span className="strong-text">{p.best[drape.best]?.name}</span><span className="palette-card__muted">идёт</span></figcaption>
                 </figure>
                 {p.avoid.length > 0 && (
                   <figure className="drape">
-                    <span className="drape__face" style={{ "--drape": p.avoid[drape.avoid]?.hex }}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</span>
+                    <DrapeFace color={p.avoid[drape.avoid]?.hex}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</DrapeFace>
                     <figcaption><span className="strong-text">{p.avoid[drape.avoid]?.name}</span><span className="palette-card__muted">хуже у лица</span></figcaption>
                   </figure>
                 )}
@@ -268,7 +288,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               <span className="palette-card__label">Твои лучшие цвета · нажми — примерю и объясню</span>
               <div className="swatch-grid">
                 {p.best.map((c, i) => (
-                  <button type="button" key={c.hex + i} className={`swatch pop${drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={drape.best === i} onClick={() => setDrape({ ...drape, best: i })}>
+                  <button type="button" key={c.hex + i} className={`swatch pop${drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.03}s` }} aria-pressed={drape.best === i} onClick={() => setDrape({ ...drape, best: i })}>
                     <span className="swatch__color" style={{ background: c.hex }} />
                     <span className="swatch__name">{c.name}</span>
                   </button>
@@ -309,7 +329,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               )}
               <span className="palette-card__label">Подойдут тебе</span>
               {p.jewelry.map((j, i) => (
-                <div key={j.name} className="jewel rise" style={{ animationDelay: `${i * 0.06}s` }}>
+                <div key={j.name} className="jewel rise" style={{ animationDelay: `${i * 0.03}s` }}>
                   <span className="jewel__icon"><Icon name="star" size={20} width={2} color="#C9A24A" /></span>
                   <span className="jewel__text"><span className="strong-text">{j.name}</span><span className="palette-card__muted">{j.note}</span></span>
                 </div>

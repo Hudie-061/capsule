@@ -2,6 +2,7 @@
 // Front of the card: the pieces; tap one to swap it from your own wardrobe.
 // Back of the card: the mannequin with callouts, or an AI try-on on your photo.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { clearTryOns, defaultMode, formatDay, getDayPlan, getPalette, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
 import { SetupError, tryOnOutfit } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
@@ -9,7 +10,7 @@ import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
 import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, saveLearned, setModelReference } from "./lib/settings.js";
 import { learnFromComment, planOutfits } from "./lib/stylist.js";
 import { kindOf } from "./lib/kinds.js";
-import { GarmentIcon, HintChips, Icon, Segmented, Sheet, WaitLine, isDressItem } from "./ui.jsx";
+import { Crossfade, GarmentIcon, HintChips, Icon, Segmented, Sheet, SwapIcon, WaitLine, isDressItem } from "./ui.jsx";
 
 // What the stylist does while the outfits are being made (shown step by step while waiting).
 const PLAN_STEPS = ["Смотрю твой гардероб…", "Подбираю сочетания цветов…", "Проверяю контраст и пропорции…", "Выбираю лучшие образы…"];
@@ -74,7 +75,9 @@ function Mannequin({ board, pieces, body, open, onToggle, onPick }) {
   return (
     <div className="mannequin">
       <button type="button" className="mannequin__figure" style={{ left: pct(BOX.fx, BOX.w), top: pct(BOX.fy, BOX.h), width: pct(600 * BOX.scale, BOX.w), height: pct(1000 * BOX.scale, BOX.h) }} onClick={onToggle} aria-expanded={open} aria-label={open ? "Скрыть подписи вещей" : "Показать подписи вещей"}>
-        {board ? <img key={board} className="fade" src={board} alt={`Манекен: ${pieces.map((p) => p.name).join(", ")}`} /> : <span className="shimmer mannequin__placeholder" />}
+        <Crossfade k={board || "none"} className="mannequin__xfade">
+          {board ? <img src={board} alt={`Манекен: ${pieces.map((p) => p.name).join(", ")}`} /> : <span className="shimmer mannequin__placeholder" />}
+        </Crossfade>
       </button>
       {open && (
         <>
@@ -91,7 +94,7 @@ function Mannequin({ board, pieces, body, open, onToggle, onPick }) {
               key={c.piece.id}
               type="button"
               className="callout pop"
-              style={{ [c.side]: pct(4, BOX.w), top: pct(c.ly - 17, BOX.h), animationDelay: `${i * 0.06}s` }}
+              style={{ [c.side]: pct(4, BOX.w), top: pct(c.ly - 17, BOX.h), animationDelay: `${i * 0.03}s` }}
               onClick={() => onPick(c.piece.id)}
               aria-label={`Заменить: ${c.piece.name}`}
             >
@@ -158,7 +161,12 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     return () => window.removeEventListener("capsule:settings", onSettings);
   }, []);
 
+  // The latest plan, also between a tap and the next render: edits read it from here, so two quick edits
+  // (a swap still flying in, then an addition) never work on an old copy and undo each other.
+  const planRef = useRef(plan);
+  planRef.current = plan;
   const store = useCallback(async (next) => {
+    planRef.current = next;
     setPlan(next);
     if (date) await saveDayPlan(date, next);
   }, [date]);
@@ -268,24 +276,40 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     if (likeAt) await amendFeedback(likeAt, { reasons: [...next] });
   };
 
-  const swapTo = async (itemId) => {
+  // `arc`: the new tile flies in along an arc (when the piece does not fly over from the sheet itself)
+  const swapTo = async (itemId, { arc = true } = {}) => {
     const current = swapId;
     setSwapId(null);
-    if (!plan || !outfit || !current || current === itemId) return;
-    const outfits = plan.outfits.map((o, i) => (i === plan.index ? { ...o, itemIds: [...new Set(o.itemIds.map((id) => (id === current ? itemId : id)))], edited: true } : o));
-    await store({ ...plan, outfits, chosen: null });
+    const latest = planRef.current;
+    if (!latest?.outfits?.[latest.index] || !current || current === itemId) return;
+    const outfits = latest.outfits.map((o, i) => (i === latest.index ? { ...o, itemIds: [...new Set(o.itemIds.map((id) => (id === current ? itemId : id)))], edited: true } : o));
+    await store({ ...latest, outfits, chosen: null });
     setLikeAt(null);
-    setArrived(itemId);
+    if (arc) setArrived(itemId);
   };
 
+  // The piece picked in a sheet flies from its card to its place in the outfit: one shared element across
+  // both states (like Framer Motion's layoutId), done by the browser's own View Transitions. Where the
+  // browser has none, or the phone asks for less motion, the tile arrives along an arc instead.
+  const [flying, setFlying] = useState("");
+  const flyInto = (id, apply) => {
+    const canFly = typeof document.startViewTransition === "function" && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!canFly) { apply({ arc: true }); return; }
+    flushSync(() => setFlying(id)); // the card in the sheet gets the shared name before the "before" picture
+    const transition = document.startViewTransition(() => { flushSync(() => { apply({ arc: false }); }); });
+    transition.finished.finally(() => setFlying(""));
+  };
+  const flyName = (id) => (flying === id ? { viewTransitionName: "piece-fly" } : undefined);
+
   const changePieces = async (update) => {
-    if (!plan || !outfit) return;
-    const outfits = plan.outfits.map((o, i) => (i === plan.index ? { ...o, itemIds: update(o.itemIds), edited: true } : o));
-    await store({ ...plan, outfits, chosen: null });
+    const latest = planRef.current;
+    if (!latest?.outfits?.[latest.index]) return;
+    const outfits = latest.outfits.map((o, i) => (i === latest.index ? { ...o, itemIds: update(o.itemIds), edited: true } : o));
+    await store({ ...latest, outfits, chosen: null });
     setLikeAt(null);
   };
   const removePiece = (id) => { setSwapId(null); changePieces((ids) => ids.filter((x) => x !== id)); };
-  const addPiece = (id) => { setAdding(false); setArrived(id); changePieces((ids) => [...ids.filter((x) => x !== id), id]); };
+  const addPiece = (id, { arc = true } = {}) => { setAdding(false); if (arc) setArrived(id); changePieces((ids) => [...ids.filter((x) => x !== id), id]); };
 
   const runTryOn = async (file) => {
     setTryon({ status: "loading", url: null, error: "" });
@@ -344,7 +368,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
       <div className="today-top rise">
         <span className="muted-text">{evening ? `Завтра · ${formatDay(date).toLowerCase()}` : formatDay(date)}</span>
         <button type="button" className="pill-chip" onClick={() => { setOccasionDraft(plan?.occasion || ""); setOccasionOpen(true); }}>
-          <Icon name={plan?.occasion ? "check" : "plus"} size={16} width={2} />
+          <SwapIcon name={plan?.occasion ? "check" : "plus"} size={16} width={2} />
           <span>{plan?.occasion || "Повод и погода"}</span>
         </button>
       </div>
@@ -404,6 +428,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
       <div className="flip">
         <div className={`flip__inner${flipped ? " is-flipped" : ""}${flipMove ? ` flip-${flipMove}` : ""}`} onAnimationEnd={(e) => { if (e.target === e.currentTarget) setFlipMove(""); }}>
           <section className="look-card flip__face" aria-hidden={flipped} inert={flipped}>
+           <Crossfade k={`${plan.index}:${outfit.title}`} className="look-card__body">
             <div className="look-card__head">
               <div className="look-card__heading">
                 <div className="look-card__title">{outfit.title}</div>
@@ -415,7 +440,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             </div>
             <div className="look-tiles" data-count={pieces.length + (addGroups.length ? 1 : 0)}>
               {pieces.map((p, i) => (
-                <button type="button" key={p.id} className={`look-tile ${p.id === arrived ? "arrive" : "rise"}`} style={p.id === arrived ? undefined : { animationDelay: `${i * 0.05}s` }} onClick={() => setSwapId(p.id)} onAnimationEnd={() => { if (p.id === arrived) setArrived(""); }} aria-label={`Заменить: ${p.name}`}>
+                <button type="button" key={p.id} className={`look-tile ${p.id === arrived ? "arrive" : "rise"}`} style={{ ...(p.id === arrived ? {} : { animationDelay: `${i * 0.03}s` }), ...flyName(p.id) }} onClick={() => setSwapId(p.id)} onAnimationEnd={() => { if (p.id === arrived) setArrived(""); }} aria-label={`Заменить: ${p.name}`}>
                   {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
                   <span className="look-tile__name">{p.name}</span>
                   <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>
@@ -428,8 +453,9 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
                 </button>
               )}
             </div>
-            {outfit.why && <p className="look-card__why">{outfit.why}</p>}
-            <HintChips tips={outfit.tips} label="Советы стилиста к образу" />
+            {outfit.why && <p className="look-card__why rise" style={{ animationDelay: `${(pieces.length + 1) * 0.03 + 0.04}s` }}>{outfit.why}</p>}
+            <div className="rise" style={{ animationDelay: `${(pieces.length + 1) * 0.03 + 0.08}s` }}><HintChips tips={outfit.tips} label="Советы стилиста к образу" /></div>
+           </Crossfade>
           </section>
 
           <section className="look-card flip__face flip__back" aria-hidden={!flipped} inert={!flipped}>
@@ -532,8 +558,8 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           {alternatives.map((alt, i) => {
             const current = alt.id === swapping?.id;
             return (
-              <button type="button" key={alt.id} className={`alt-card rise${current ? " is-current" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={current} onClick={() => swapTo(alt.id)}>
-                <span className="alt-card__image">
+              <button type="button" key={alt.id} className={`alt-card rise${current ? " is-current" : ""}`} style={{ animationDelay: `${i * 0.03}s` }} aria-pressed={current} onClick={() => (current ? swapTo(alt.id) : flyInto(alt.id, (o) => swapTo(alt.id, o)))}>
+                <span className="alt-card__image" style={flyName(alt.id)}>
                   {alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}
                   {current && <span className="badge-dark">Сейчас</span>}
                 </span>
@@ -569,8 +595,8 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             <span className="section-label">{group.label}</span>
             <div className="alt-grid">
               {group.items.map((alt, i) => (
-                <button type="button" key={alt.id} className="alt-card rise" style={{ animationDelay: `${i * 0.04}s` }} onClick={() => addPiece(alt.id)}>
-                  <span className="alt-card__image">{alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}</span>
+                <button type="button" key={alt.id} className="alt-card rise" style={{ animationDelay: `${i * 0.03}s` }} onClick={() => flyInto(alt.id, (o) => addPiece(alt.id, o))}>
+                  <span className="alt-card__image" style={flyName(alt.id)}>{alt.thumbnail || alt.image ? <img src={alt.thumbnail || alt.image} alt="" /> : <GarmentIcon item={alt} size={72} />}</span>
                   <span className="alt-card__text"><span className="strong-text">{alt.name}</span><span className="tiny-text">{[alt.brand, ...(alt.tags || []).slice(0, 2)].filter(Boolean).join(" · ") || " "}</span></span>
                 </button>
               ))}

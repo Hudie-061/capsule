@@ -9,7 +9,7 @@ import { checkPose, HINTS, isStill } from "./lib/pose-check.js";
 import { loadLiveLandmarker } from "./lib/pose-models.js";
 import { canvasToBlob, makeCanvas } from "./lib/image.js";
 import { PoseGuide } from "./pose-guide.jsx";
-import { Icon } from "./ui.jsx";
+import { Icon, SwapIcon } from "./ui.jsx";
 
 const BURST = 4; // frames per photo
 const COUNT = 3; // seconds of countdown
@@ -262,7 +262,7 @@ export function BodyCapture({ onDone, onCancel }) {
         <button type="button" className="round-button round-button--lg capture__close" aria-label="Закрыть" onClick={onCancel}><Icon name="close" size={22} width={2} /></button>
         {live && phase !== "loading" && <span className="capture__step">{VIEW_NAME[phase]} · {phase === "front" ? "1" : "2"} из 2</span>}
         <button type="button" className={`pill-chip capture__voice${voice ? " is-on" : ""}`} aria-pressed={voice} onClick={() => setVoice(!voice)}>
-          <Icon name={voice ? "bell" : "close"} size={14} width={2} /> {voice ? "Голос вкл." : "Без звука"}
+          <SwapIcon name={voice ? "bell" : "close"} size={14} width={2} /> {voice ? "Голос вкл." : "Без звука"}
         </button>
       </div>
 

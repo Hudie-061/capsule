@@ -284,7 +284,7 @@ export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGar
               {toSelect.map((job, i) => {
                 const on = picked.has(job.id);
                 return (
-                  <button type="button" key={job.id} className={`alt-card pick-card rise${on ? " is-current" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} aria-pressed={on} onClick={() => togglePick(job.id)}>
+                  <button type="button" key={job.id} className={`alt-card pick-card rise${on ? " is-current" : ""}`} style={{ animationDelay: `${i * 0.03}s` }} aria-pressed={on} onClick={() => togglePick(job.id)}>
                     <span className="alt-card__image">
                       <img src={thumbOf(job)} alt="" />
                       <span className={`pick-card__check${on ? " is-on" : ""}`} aria-hidden="true">{on && <Icon name="check" size={16} width={2.4} />}</span>

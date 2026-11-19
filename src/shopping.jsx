@@ -439,7 +439,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           <div className="gap-row" role="group" aria-label="Чего не хватает" ref={rowRef} onScroll={updateEdges}>
             {altsLoading && [0, 1, 2].map((i) => <span key={`alt-${i}`} className="gap-card shimmer gap-card--skeleton" aria-label="Подбираю другую вещь" />)}
             {gaps.map((g, i) => (
-              <div className="gap-slot rise" key={`${g.item}-${i}`} style={{ animationDelay: `${i * 0.05}s` }}>
+              <div className="gap-slot rise" key={`${g.item}-${i}`} style={{ animationDelay: `${i * 0.03}s` }}>
                 <button type="button" className={`gap-card${i === selected ? " is-on" : ""}`} aria-pressed={i === selected} onClick={() => { setSelected(i); setBought(""); }}>
                   <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
                   <span className="gap-card__name">{g.item}</span>
@@ -506,7 +506,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                 {(allShops ? links : links.slice(0, 4)).map((s, i) => {
                   const [badge, color] = BRAND[s.id] || [s.name.replace(/[^A-Za-zА-Яа-я0-9]/g, "").slice(0, 2), "#574D44"];
                   return (
-                    <a role="listitem" key={s.id} className={`shop-tile rise${s.id === "zalando" ? " is-main" : ""}`} style={{ animationDelay: `${i * 0.04}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
+                    <a role="listitem" key={s.id} className={`shop-tile rise${s.id === "zalando" ? " is-main" : ""}`} style={{ animationDelay: `${i * 0.03}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
                       <span className="shop-tile__top">
                         <span className="shop-tile__badge" style={{ background: color }} aria-hidden="true">{badge}</span>
                         <Icon name="external" size={15} width={2} />
@@ -546,7 +546,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                   const id = idOf(o);
                   const off = discount(o);
                   return (
-                    <div key={id} className={`offer rise${o === best ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.05}s` }}>
+                    <div key={id} className={`offer rise${o === best ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.03}s` }}>
                       <a className="offer__main" href={direct[id] || offerFallback(o, linkCountry, gender)} target="_blank" rel="noopener noreferrer" onClick={(e) => openOffer(e, o)} aria-busy={opening === id}>
                         <span className="offer__icon">{o.image ? <img src={o.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <GarmentIcon item={gap} size={38} />}</span>
                         <span className="offer__text">

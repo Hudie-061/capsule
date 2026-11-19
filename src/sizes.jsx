@@ -129,7 +129,7 @@ export function SizesView({ onBack, onToast }) {
       <div className="section-head"><span className="section-title">Твои размеры</span><span className="tiny-text">EN 13402 · Mondopoint</span></div>
       <div className="size-grid">
         {sizes.map((s, i) => (
-          <button type="button" key={s.id} className="size-card rise" style={{ animationDelay: `${i * 0.05}s` }} onClick={() => openChart(s.id)} aria-label={`${s.label}: ${s.value}. Открыть размерную сетку`}>
+          <button type="button" key={s.id} className="size-card rise" style={{ animationDelay: `${i * 0.03}s` }} onClick={() => openChart(s.id)} aria-label={`${s.label}: ${s.value}. Открыть размерную сетку`}>
             <span className="tiny-text">{s.label}</span>
             <span className="size-card__value">{s.value}</span>
             <span className="tiny-text">{s.detail}</span>
