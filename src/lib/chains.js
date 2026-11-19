@@ -60,19 +60,25 @@ const ABOUTYOU = { be: "aboutyou.be", nl: "aboutyou.nl", de: "aboutyou.de", at: 
 // SHEIN (added at the owner's request, 19.11.2026): its search page m.shein.com/<site>/pdsearch/<query>/ —
 // the query already says gender, colour and type in English ("women white t-shirt"), which is what the
 // owner sets by hand there. Belgium uses the EU site (euqs, the address the owner sent). Sizes are SHEIN's
-// own attribute codes (size = attribute 87); only M is known so far, from the owner's link (87_417) —
-// the other sizes go here when their codes are known. SHEIN blocks automated browsers with a captcha,
-// so these links were not opened here: the owner checks them on the phone.
+// own attribute codes (size = attribute 87). They were read from two links the owner sent on 19.11.2026:
+// one with only M (87_417), one with every letter size ticked — the address lists the codes in the order
+// of the size panel (XXS, XS, XS/S, S, S/M, M, …), and M is 6th there too. SHEIN also sells combined
+// sizes ("S/M", "M/L"), so a person in M also gets S/M and M/L. Colours stay in the words: SHEIN files
+// one colour under many codes (white is 27_739 and 27_103). SHEIN blocks automated browsers with a
+// captcha, so these links were not opened here: the owner checks them on the phone.
 const SHEIN = { be: "euqs", lu: "euqs", at: "euqs", ie: "euqs", pt: "euqs", nl: "nl", fr: "fr", de: "de", es: "es", it: "it", pl: "pl", us: "us" };
-const SHEIN_SIZES = { M: "87_417" };
+const SHEIN_SIZE_CODES = { XXS: 755, XS: 568, "XS/S": 1002166, S: 66916637, "S/M": 1002167, M: 417, "M/L": 387, L: 754, "L/XL": 756, XL: 1004710, "XL/XXL": 757, XXL: 66916697, "3XL": 759, "4XL": 758, "5XL": 1006125 };
+// the person's size → the SHEIN sizes that fit (the size itself and the combined ones that include it)
+const SHEIN_FITS = { XS: ["XS", "XS/S"], S: ["S", "XS/S", "S/M"], M: ["M", "S/M", "M/L"], L: ["L", "M/L", "L/XL"], XL: ["XL", "L/XL", "XL/XXL"], XXL: ["XXL", "XL/XXL"], "3XL": ["3XL"] };
+const sheinSizes = (size) => (size?.system === "letter" ? SHEIN_FITS[size.pick] || [] : []);
 function sheinLink(c, s, g, { size = null } = {}) {
   const base = c === "gb" ? "https://m.shein.co.uk" : `https://m.shein.com/${SHEIN[c] || "euqs"}`;
-  const code = size?.system === "letter" ? SHEIN_SIZES[size.pick] : null;
+  const codes = sheinSizes(size).map((name) => `87_${SHEIN_SIZE_CODES[name]}`).join("-");
   // SHEIN has no men/women section in a search address, so the gender goes into the words
   const words = [g === "female" ? "women" : g === "male" ? "men" : "", s].filter(Boolean).join(" ");
-  return `${base}/pdsearch/${q(words)}/${code ? `?attr_ids=${code}` : ""}`;
+  return `${base}/pdsearch/${q(words)}/${codes ? `?attr_ids=${codes}` : ""}`;
 }
-const sheinHasSize = (size) => Boolean(size?.system === "letter" && SHEIN_SIZES[size.pick]);
+const sheinHasSize = (size) => sheinSizes(size).length > 0;
 
 // `match` is tested against the shop name Google Shopping gives (`source`).
 // `own` = shown as a search link; the rest only count as popular when they appear in offers.
@@ -162,7 +168,7 @@ function linkNotes(id, own, { size = null, sale = false, budget = 0 } = {}, g = 
   if (id === "zalando") return [sizeLabel ? `твой размер ${sizeLabel}` : "все размеры", "сначала дешёвые", sale ? "только скидки" : "", budget ? `до ${money(budget)}` : ""];
   if (id === "hm") return [size?.system === "letter" && sex ? `размер ${sizeLabel}` : "", "сначала дешёвые"];
   if (id === "uniqlo" || id === "footlocker") return ["сначала дешёвые"];
-  if (id === "shein") return [sex, sheinHasSize(size) ? `размер ${sizeLabel}` : "размер — на сайте", "цвет и тип в поиске"];
+  if (id === "shein") return [sex, sheinHasSize(size) ? `размер ${sizeLabel}${sheinSizes(size).length > 1 ? ` (и ${sheinSizes(size).slice(1).join(", ")})` : ""}` : "размер — на сайте", "цвет и тип в поиске"];
   return [sex, "поиск на сайте"];
 }
 

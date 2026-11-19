@@ -63,11 +63,13 @@ describe("popular chains", () => {
   it("opens SHEIN's search with gender, colour and type in the words, and size M as SHEIN's filter code", () => {
     const shein = (query, filters = {}, country = "be") => chainLinks(country, query, { filters }).find((l) => l.id === "shein");
     expect(shein("women white t-shirt").url).toBe("https://m.shein.com/euqs/pdsearch/women%20white%20t-shirt/");
-    expect(shein("women white t-shirt", { size: { system: "letter", pick: "M" } }).url).toBe("https://m.shein.com/euqs/pdsearch/women%20white%20t-shirt/?attr_ids=87_417");
+    // M plus SHEIN's combined sizes that include it (S/M, M/L); codes read from the owner's links
+    expect(shein("women white t-shirt", { size: { system: "letter", pick: "M" } }).url).toBe("https://m.shein.com/euqs/pdsearch/women%20white%20t-shirt/?attr_ids=87_417-87_1002167-87_387");
+    expect(shein("men grey hoodie", { size: { system: "letter", pick: "L" } }).url).toBe("https://m.shein.com/euqs/pdsearch/men%20grey%20hoodie/?attr_ids=87_754-87_387-87_756");
     expect(shein("men black jeans", { size: { system: "wl", pick: { w: 32, l: 32 } } }, "nl").url).toBe("https://m.shein.com/nl/pdsearch/men%20black%20jeans/");
-    // the tile says what the link does: no size code known for L yet
-    expect(shein("women white t-shirt", { size: { system: "letter", pick: "L" } }).notes).toEqual(["женское", "размер — на сайте", "цвет и тип в поиске"]);
-    expect(shein("women white t-shirt", { size: { system: "letter", pick: "M" } }).notes).toContain("размер M");
+    // the tile says what the link does
+    expect(shein("women white t-shirt", { size: { system: "letter", pick: "M" } }).notes).toEqual(["женское", "размер M (и S/M, M/L)", "цвет и тип в поиске"]);
+    expect(shein("women white t-shirt", { size: { system: "euBottom", pick: 38 } }).notes).toContain("размер — на сайте");
   });
 
   it("describes each shop tile by the filters its link really carries", () => {
