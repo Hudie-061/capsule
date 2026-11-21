@@ -38,6 +38,9 @@ export async function getSettings() {
     gapWishes: { categories: [], budget: 50, style: "", note: "", budgetSet: false, ...(saved.gapWishes && typeof saved.gapWishes === "object" ? saved.gapWishes : {}) },
     gapsSeen: Array.isArray(saved.gapsSeen) ? saved.gapsSeen : [],
     gapsDismissed: Array.isArray(saved.gapsDismissed) ? saved.gapsDismissed : [],
+    // «Моя палитра»: "simple" (plain everyday colours) or "extended" (the season's full fan); "" until chosen
+    // (then src/lib/palette-mode.js picks by gender).
+    paletteMode: saved.paletteMode === "simple" || saved.paletteMode === "extended" ? saved.paletteMode : "",
   };
 }
 

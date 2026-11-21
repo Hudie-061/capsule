@@ -17,7 +17,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor } from "./lib/chains.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
-import { getGapsCache, getPalette, inMonth, saveGapsCache } from "./lib/daily.js";
+import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
+import { getActivePalette } from "./lib/palette-mode.js";
 import { kindOf } from "./lib/kinds.js";
 import { bodyOrProfile, getBody, sizeForKind, sizeLabel, sizeOptions, sizePick, sizeSystem, stepLength, stepSize, wardrobeSizes } from "./lib/sizes.js";
 import { SizeChips } from "./size-chips.jsx";
@@ -112,7 +113,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     try {
       const settings = await getSettings();
       const result = await findGaps({
-        items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: (await getPalette())?.result || null,
+        items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: await getActivePalette(),
         wishes: w, shown: settings.gapsSeen.slice(0, 18), dismissed: settings.gapsDismissed.slice(0, 30),
         bought: (await getPurchases()).map((p) => p.gap).filter(Boolean).slice(-10),
       });
@@ -181,7 +182,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
   useEffect(() => {
     let alive = true;
-    getGapsCache().then((saved) => {
+    // first the palette mode (a switch or an old palette line drops the cards picked for the other mode)
+    getActivePalette().catch(() => null).then(() => getGapsCache()).then((saved) => {
       if (!alive) return;
       setCache(saved);
       const stale = !saved || refreshKey || Math.abs((saved.itemCount || 0) - items.length) >= 3;
@@ -203,7 +205,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       try {
         const settings = await getSettings();
         const result = await findGaps({
-          items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: (await getPalette())?.result || null,
+          items, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), palette: await getActivePalette(),
           wishes: { ...settings.gapWishes, categories: [] }, dismissed: settings.gapsDismissed.slice(0, 30), replace: r,
         });
         if (alive) { setAlts({ key, status: "done", items: (result.items || []).slice(0, 3).map((g) => ({ ...g, focus: true, replaceOf: r.name })) }); setSelected(0); }

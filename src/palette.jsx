@@ -13,6 +13,7 @@ import { canvasToBlob, loadBitmap, makeCanvas } from "./lib/image.js";
 import { applyGains, findWhiteSheet, sampleAt, whiteGains } from "./lib/white-balance.js";
 import { getProfile, saveProfile } from "./lib/settings.js";
 import { getBody } from "./lib/sizes.js";
+import { getPaletteMode, paletteFor, paletteProfileText, setPaletteMode } from "./lib/palette-mode.js";
 import { FaceSticker } from "./face-sticker.jsx";
 import { HintChips, Icon, Segmented, WaitLine } from "./ui.jsx";
 
@@ -94,22 +95,63 @@ export async function paletteFromPhoto(photo, { calibrated = false, fromBody = f
     selfie = await smallSelfie(photo);
     await blobs.set(SELFIE, selfie);
   } catch { /* the palette works without the photo */ }
-  // The stylist reads «Цвета, которые идут» from the profile, so outfits and shopping use the palette too.
+  // The stylist reads «Цвета, которые идут» from the profile, so outfits and shopping use the palette too
+  // (the colours of the chosen mode: simple or extended).
   const profile = await getProfile();
-  await saveProfile({ ...profile, palette: paletteText(result) });
+  await saveProfile({ ...profile, palette: paletteProfileText(paletteFor(result, await getPaletteMode())) });
   return { saved, selfie };
 }
 
-// The stylist reads this from the profile: season, undertone and contrast (for the outfit's contrast), colours.
-function paletteText(p) {
-  const traits = [p.undertone, p.contrast].filter(Boolean).join(", ");
-  return `${p.season}${traits ? ` (${traits})` : ""}: ${p.best.map((c) => c.name.toLowerCase()).join(", ")}${p.avoid.length ? `; у лица избегать: ${p.avoid.map((c) => c.name.toLowerCase()).join(", ")}` : ""}`;
+// «Простая» or «Расширенная» (src/lib/palette-mode.js): chosen before the first selfie, switched in one tap.
+const MODES = [
+  { id: "simple", title: "Простая", text: "Белый, бежевый, серый, тёмно-синий, чёрный — базовые цвета, которые легко сочетать", preview: ["#F7F7F5", "#D8C3A5", "#8A8A8A", "#1F2A44", "#111111", "#2E7D4F"] },
+  { id: "extended", title: "Расширенная", text: "Терракота, шалфей, пыльная роза, петроль — все оттенки твоего цветотипа", preview: ["#B5735A", "#9AA382", "#C2949A", "#1F5A66", "#C99A2E", "#9C8AA5"] },
+];
+const MODE_NOTE = {
+  simple: "Понятные базовые цвета в оттенке, который тебе идёт.",
+  extended: "Все оттенки твоего цветотипа — для тех, кто любит цвет.",
+};
+
+function ModePick({ mode, onChange }) {
+  return (
+    <div className="mode-pick" role="radiogroup" aria-label="Какую палитру показать">
+      {MODES.map((m) => (
+        <button type="button" role="radio" key={m.id} aria-checked={mode === m.id} className={`mode-pick__card${mode === m.id ? " is-on" : ""}`} onClick={() => onChange(m.id)}>
+          <span className="mode-pick__fan" aria-hidden="true">{m.preview.map((hex) => <span key={hex} style={{ background: hex }} />)}</span>
+          <span className="mode-pick__title">{mode === m.id && <Icon name="check" size={14} width={2.6} />}{m.title}</span>
+          <span className="mode-pick__text">{m.text}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// 60 / 30 / 10: one base colour for most of the outfit, a second one, one accent — drawn with the person's
+// own colours (the tapped one when it fits the role), with an example of which pieces take which colour.
+function MixBar({ colors, picked }) {
+  const base = colors.filter((c) => c.role === "base");
+  const accents = colors.filter((c) => c.role === "accent");
+  if (base.length < 2 || !accents.length) return null;
+  const main = picked?.role === "base" ? picked : base[0];
+  const second = base.find((c) => c !== main);
+  const accent = picked?.role === "accent" ? picked : accents[0];
+  const low = (c) => c.name.toLowerCase();
+  return (
+    <div className="mix">
+      <span className="palette-card__label">Как сочетать</span>
+      <div className="mix__bar" aria-hidden="true">
+        <span style={{ flexGrow: 6, background: main.hex }}><b>60 %</b></span>
+        <span style={{ flexGrow: 3, background: second.hex }}><b>30 %</b></span>
+        <span style={{ flexGrow: 1, background: accent.hex }} />
+      </div>
+      <span className="palette-card__muted">Например: брюки и куртка — {low(main)}, свитер — {low(second)}, футболка или шарф у лица — {low(accent)}.</span>
+    </div>
+  );
 }
 
 export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess }) {
   const [saved, setSaved] = useState(null);
   const [loaded, setLoaded] = useState(false);
-  const [tab, setTab] = useState("colors");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [story, setStory] = useState(null);
@@ -117,13 +159,23 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   const [gender, setGender] = useState(""); // for the sticker face shown until there is a selfie
   const [drape, setDrape] = useState({ best: 0, avoid: 0 });
   const [calib, setCalib] = useState(null); // { url, full, small, sheet, miss } while the photo is being calibrated
+  const [mode, setMode] = useState(""); // "simple" | "extended"
   const fileRef = useRef(null);
 
   useEffect(() => {
     getPalette().then((value) => { setSaved(value); setLoaded(true); });
     blobs.get(SELFIE).then((blob) => { if (blob) setSelfie(URL.createObjectURL(blob)); }).catch(() => {});
     Promise.all([getBody(), getProfile()]).then(([body, profile]) => setGender(body?.gender || profile?.gender || "")).catch(() => {});
+    getPaletteMode().then(setMode).catch(() => setMode("extended"));
   }, []);
+
+  // one tap: the colours here, the stylist's profile line and «Чего не хватает» all follow the mode
+  const switchMode = (next) => {
+    if (next === mode) return;
+    setMode(next);
+    setDrape({ best: 0, avoid: 0 });
+    setPaletteMode(next).catch(() => {});
+  };
   useEffect(() => () => { if (story) URL.revokeObjectURL(story); }, [story]);
   useEffect(() => () => { if (selfie) URL.revokeObjectURL(selfie); }, [selfie]);
 
@@ -193,7 +245,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
   };
 
   const share = async () => {
-    const blob = await storyImage(saved.result);
+    const blob = await storyImage(p); // the colours of the chosen mode
     const file = new File([blob], "capsule-palette.png", { type: "image/png" });
     if (navigator.canShare?.({ files: [file] })) {
       try { await navigator.share({ files: [file], title: "Моя палитра" }); return; } catch (e) { if (e?.name === "AbortError") return; }
@@ -201,7 +253,14 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
     setStory(URL.createObjectURL(blob)); // fallback: show the picture to save or screenshot
   };
 
-  const p = saved?.result;
+  const p = saved?.result ? paletteFor(saved.result, mode) : null;
+  const face = (key) => (selfie ? <img src={selfie} alt="" key={key} /> : <FaceSticker gender={gender} undertone={p?.undertone} metal={p?.metal?.good?.[0]} />);
+  const swatch = (c, i) => (
+    <button type="button" key={c.hex + i} className={`swatch pop${drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${(i % 4) * 0.03}s` }} aria-pressed={drape.best === i} onClick={() => setDrape({ ...drape, best: i })}>
+      <span className="swatch__color" style={{ background: c.hex }} />
+      <span className="swatch__name">{c.name}</span>
+    </button>
+  );
   const picker = <input ref={fileRef} type="file" accept="image/*" capture="user" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = ""; if (file) prepare(file); }} />;
 
   return (
@@ -235,11 +294,17 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
           </div>
           {error && <span className="error-text error-text--dark">{error}</span>}
         </div>
-      ) : !loaded ? null : !p || busy ? (
+      ) : !loaded || !mode ? null : !p || busy ? (
         <div className="palette-card palette-card--intro rise">
           <span className="palette-card__avatar"><Icon name="camera" size={28} color="#CFC6BA" /></span>
           <span className="palette-card__season">{busy ? "Смотрю на цвета…" : "Узнай свой цветотип"}</span>
           <span className="palette-card__muted">{busy ? "Это займёт несколько секунд." : "Одно селфи — и я подберу цвета одежды, которые тебе идут, и металлы для украшений. Фото останется только на телефоне, чтобы показать цвета рядом с лицом."}</span>
+          {!busy && mode && (
+            <>
+              <span className="palette-card__label">Какую палитру показать? <span className="palette-card__muted">потом можно переключить</span></span>
+              <ModePick mode={mode} onChange={switchMode} />
+            </>
+          )}
           {!busy && (
             <ul className="calib-tips">
               <li><b>Днём у окна</b>, лицом к свету, без фильтров</li>
@@ -262,80 +327,89 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
               <span className="palette-card__muted">{[p.undertone, p.contrast, p.calibrated ? "по белому листу" : ""].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
-          {p.why ? <p className="palette-why">{p.why}</p> : <p className="palette-note">Сделай новое селфи — теперь объясняю, почему тебе идёт каждый цвет.</p>}
-          <HintChips tips={p.traits} tone="dark" label="Из чего складывается цветотип" />
-          {p.photoNote && <p className="palette-note">{p.photoNote}</p>}
-          {p.fromBody && <p className="palette-note">Палитра определена по лицу с фото в полный рост — там оно небольшое. Для точности сделай крупное селфи при дневном свете.</p>}
-          <Segmented role="tablist" tone="dark" label="Раздел палитры" value={tab} onChange={setTab} options={[{ id: "colors", label: "Цвета" }, { id: "jewel", label: "Металлы и украшения" }]} />
-          {tab === "colors" ? (
-            <div className="palette-section">
-              {/* the selfie when there is one, otherwise a sticker face of the person's gender */}
-              <div className="drape-row" aria-label={selfie ? "Цвета рядом с лицом" : "Цвета рядом с лицом, пример"}>
-                <figure className="drape">
-                  <DrapeFace color={p.best[drape.best]?.hex}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</DrapeFace>
-                  <figcaption><span className="strong-text">{p.best[drape.best]?.name}</span><span className="palette-card__muted">идёт</span></figcaption>
-                </figure>
-                {p.avoid.length > 0 && (
-                  <figure className="drape">
-                    <DrapeFace color={p.avoid[drape.avoid]?.hex}>{selfie ? <img src={selfie} alt="" /> : <FaceSticker gender={gender} undertone={p.undertone} metal={p.metal?.good?.[0]} />}</DrapeFace>
-                    <figcaption><span className="strong-text">{p.avoid[drape.avoid]?.name}</span><span className="palette-card__muted">хуже у лица</span></figcaption>
-                  </figure>
-                )}
-              </div>
-              {!selfie && (
-                <button type="button" className="drape-hint" onClick={() => fileRef.current?.click()}><Icon name="camera" size={16} width={2} /> Это пример. Добавь селфи — покажу цвета рядом с твоим лицом</button>
-              )}
-              <span className="palette-card__label">Твои лучшие цвета · нажми — примерю и объясню</span>
-              <div className="swatch-grid">
-                {p.best.map((c, i) => (
-                  <button type="button" key={c.hex + i} className={`swatch pop${drape.best === i ? " is-on" : ""}`} style={{ animationDelay: `${i * 0.03}s` }} aria-pressed={drape.best === i} onClick={() => setDrape({ ...drape, best: i })}>
-                    <span className="swatch__color" style={{ background: c.hex }} />
-                    <span className="swatch__name">{c.name}</span>
-                  </button>
-                ))}
-              </div>
-              {p.best[drape.best]?.why && <p className="swatch-why fade" key={`best-${drape.best}`}><b>{p.best[drape.best].name}</b> — {p.best[drape.best].why}</p>}
+          <div className="palette-mode">
+            <Segmented tone="dark" label="Какая палитра" value={p.mode} onChange={switchMode} options={[{ id: "simple", label: "Простая" }, { id: "extended", label: "Расширенная" }]} />
+            <span className="palette-card__muted fade" key={p.mode}>{MODE_NOTE[p.mode]}</span>
+          </div>
+
+          <div className="palette-section">
+            {/* the selfie when there is one, otherwise a sticker face of the person's gender */}
+            <div className="drape-row" aria-label={selfie ? "Цвета рядом с лицом" : "Цвета рядом с лицом, пример"}>
+              <figure className="drape">
+                <DrapeFace color={p.best[drape.best]?.hex}>{face("best")}</DrapeFace>
+                <figcaption><span className="strong-text">{p.best[drape.best]?.name}</span><span className="palette-card__muted">идёт</span></figcaption>
+              </figure>
               {p.avoid.length > 0 && (
-                <>
-                  <span className="palette-card__label">Лучше избегать у лица</span>
-                  <div className="swatch-grid">
-                    {p.avoid.map((c, i) => (
-                      <button type="button" key={c.hex + i} className={`swatch${drape.avoid === i ? " is-on" : ""}`} aria-pressed={drape.avoid === i} onClick={() => setDrape({ ...drape, avoid: i })}>
-                        <span className="swatch__color swatch__color--avoid" style={{ background: c.hex }}>
-                          <svg aria-hidden="true" width="100%" height="100%" viewBox="0 0 70 34" preserveAspectRatio="none"><path d="M0 34 L70 0" stroke="#1E1B18" strokeWidth="3" /></svg>
-                        </span>
-                        <span className="swatch__name swatch__name--muted">{c.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                  {p.avoid[drape.avoid]?.why && <p className="swatch-why fade" key={`avoid-${drape.avoid}`}><b>{p.avoid[drape.avoid].name}</b> — {p.avoid[drape.avoid].why}</p>}
-                </>
+                <figure className="drape">
+                  <DrapeFace color={p.avoid[drape.avoid]?.hex}>{face("avoid")}</DrapeFace>
+                  <figcaption><span className="strong-text">{p.avoid[drape.avoid]?.name}</span><span className="palette-card__muted">хуже у лица</span></figcaption>
+                </figure>
               )}
             </div>
-          ) : (
-            <div className="palette-section rise">
-              {p.metal?.name && (
-                <div className="metal-row">
-                  <div className="metal-row__text"><span className="palette-card__muted">Твой металл</span><span className="strong-text">{p.metal.name}</span></div>
-                  <div className="metal-row__dots">
-                    {p.metal.good.map((hex) => <span key={hex} className="metal-dot" style={{ background: hex }} />)}
-                    {p.metal.avoid && (
-                      <span className="metal-dot metal-dot--avoid" style={{ background: p.metal.avoid }} title="Лучше избегать">
-                        <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 26 L26 4" stroke="#1E1B18" strokeWidth="3" /></svg>
+            {!selfie && (
+              <button type="button" className="drape-hint" onClick={() => fileRef.current?.click()}><Icon name="camera" size={16} width={2} /> Это пример. Добавь селфи — покажу цвета рядом с твоим лицом</button>
+            )}
+
+            <div className="palette-group" key={`base-${p.mode}`}>
+              <span className="palette-card__label">База гардероба <span className="palette-card__muted">брюки, куртки, свитера — большая часть вещей</span></span>
+              <div className="swatch-grid">{p.best.map((c, i) => (c.role === "base" ? swatch(c, i) : null))}</div>
+            </div>
+            <div className="palette-group" key={`accent-${p.mode}`}>
+              <span className="palette-card__label">Акценты <span className="palette-card__muted">1–2 на образ, лучше у лица</span></span>
+              <div className="swatch-grid">{p.best.map((c, i) => (c.role === "accent" ? swatch(c, i) : null))}</div>
+            </div>
+            {p.best[drape.best]?.why && <p className="swatch-why fade" key={`best-${p.mode}-${drape.best}`}><b>{p.best[drape.best].name}</b> — {p.best[drape.best].why}</p>}
+
+            <MixBar colors={p.best} picked={p.best[drape.best]} />
+
+            {p.avoid.length > 0 && (
+              <div className="palette-group">
+                <span className="palette-card__label">У лица — осторожнее <span className="palette-card__muted">в брюках и обуви можно</span></span>
+                <div className="swatch-grid">
+                  {p.avoid.map((c, i) => (
+                    <button type="button" key={c.hex + i} className={`swatch${drape.avoid === i ? " is-on" : ""}`} aria-pressed={drape.avoid === i} onClick={() => setDrape({ ...drape, avoid: i })}>
+                      <span className="swatch__color swatch__color--avoid" style={{ background: c.hex }}>
+                        <svg aria-hidden="true" width="100%" height="100%" viewBox="0 0 70 34" preserveAspectRatio="none"><path d="M0 34 L70 0" stroke="#1E1B18" strokeWidth="3" /></svg>
                       </span>
-                    )}
-                  </div>
+                      <span className="swatch__name swatch__name--muted">{c.name}</span>
+                    </button>
+                  ))}
                 </div>
-              )}
-              <span className="palette-card__label">Подойдут тебе</span>
-              {p.jewelry.map((j, i) => (
-                <div key={j.name} className="jewel rise" style={{ animationDelay: `${i * 0.03}s` }}>
-                  <span className="jewel__icon"><Icon name="star" size={20} width={2} color="#C9A24A" /></span>
-                  <span className="jewel__text"><span className="strong-text">{j.name}</span><span className="palette-card__muted">{j.note}</span></span>
+                {p.avoid[drape.avoid]?.why && <p className="swatch-why fade" key={`avoid-${p.mode}-${drape.avoid}`}><b>{p.avoid[drape.avoid].name}</b> — {p.avoid[drape.avoid].why}</p>}
+              </div>
+            )}
+          </div>
+
+          <div className="palette-group palette-group--line">
+            <span className="palette-card__label">Почему такой цветотип</span>
+            {p.why ? <p className="palette-why">{p.why}</p> : <p className="palette-note">Сделай новое селфи — теперь объясняю, почему тебе идёт каждый цвет.</p>}
+            <HintChips tips={p.traits} tone="dark" label="Из чего складывается цветотип" />
+            {p.photoNote && <p className="palette-note">{p.photoNote}</p>}
+            {p.fromBody && <p className="palette-note">Палитра определена по лицу с фото в полный рост — там оно небольшое. Для точности сделай крупное селфи при дневном свете.</p>}
+          </div>
+
+          <div className="palette-group palette-group--line">
+            <span className="palette-card__label">Металлы и украшения</span>
+            {p.metal?.name && (
+              <div className="metal-row">
+                <div className="metal-row__text"><span className="palette-card__muted">Твой металл</span><span className="strong-text">{p.metal.name}</span></div>
+                <div className="metal-row__dots">
+                  {p.metal.good.map((hex) => <span key={hex} className="metal-dot" style={{ background: hex }} />)}
+                  {p.metal.avoid && (
+                    <span className="metal-dot metal-dot--avoid" style={{ background: p.metal.avoid }} title="Лучше избегать">
+                      <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path d="M4 26 L26 4" stroke="#1E1B18" strokeWidth="3" /></svg>
+                    </span>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            )}
+            {p.jewelry.map((j) => (
+              <div key={j.name} className="jewel">
+                <span className="jewel__icon"><Icon name="star" size={20} width={2} color="#C9A24A" /></span>
+                <span className="jewel__text"><span className="strong-text">{j.name}</span><span className="palette-card__muted">{j.note}</span></span>
+              </div>
+            ))}
+          </div>
           <span className="palette-card__foot">
             <span className="palette-card__brand">Капсула</span>
             <span className="row-gap">
@@ -352,7 +426,7 @@ export function PaletteView({ onBack, onFindClothes, setupReady, onOpenAccess })
           <button type="button" className="btn btn--dark btn--grow2 btn--lift" onClick={onFindClothes}>Найти вещи в моих цветах</button>
         </div>
       )}
-      {p && !busy && <p className="tiny-text center-text">Палитра добавлена в «Мой стиль» — стилист учитывает её в образах и покупках.</p>}
+      {p && !busy && <p className="tiny-text center-text">{p.mode === "simple" ? "Стилист подбирает образы и покупки в этих простых цветах." : "Палитра добавлена в «Мой стиль» — стилист учитывает её в образах и покупках."}</p>}
 
       {story && (
         <div className="story-preview" role="dialog" aria-modal="true" aria-label="Картинка для сторис">

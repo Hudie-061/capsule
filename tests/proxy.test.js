@@ -350,6 +350,30 @@ describe("no general-purpose access", () => {
     expect(prompt).toContain("Create 8 distinct");
   });
 
+  it("turns the weather read on the phone into rules that come first", async () => {
+    await worker.fetch(call("/api/plan", { wardrobe, occasion: "+6 и ветрено", weather: { temp: 6, feels: 2, wind: true, rain: false, snow: false, level: "cold" } }), env());
+    const prompt = upstream[0].prompt;
+    expect(prompt).toContain("About +6 °C (feels like +2 °C); windy.");
+    expect(prompt).toMatch(/every outfit MUST include a coat or jacket/);
+    expect(prompt).toContain("These weather rules come first");
+    expect(prompt).toContain('"kind"');
+  });
+
+  it("without weather words asks for the usual weather of the date and country", async () => {
+    await worker.fetch(call("/api/plan", { wardrobe, weather: { level: "boiling", temp: "hot" }, country: "be" }), env());
+    const prompt = upstream[0].prompt;
+    expect(prompt).toContain("Not given. Dress for the usual weather on this date in Belgium");
+    expect(prompt).not.toContain("boiling");
+  });
+
+  it("asks for plain colours when the person chose the simple palette", async () => {
+    await worker.fetch(call("/api/gaps", { wardrobe, colors: "simple" }), env());
+    expect(upstream[0].prompt).toMatch(/SIMPLE palette.*Never suggest dusty, muted or mixed shades/s);
+    upstream = [];
+    await worker.fetch(call("/api/gaps", { wardrobe, colors: "extended" }), env());
+    expect(upstream[0].prompt).not.toContain("SIMPLE palette");
+  });
+
   it("try-on still works for older app versions that send no garment names", async () => {
     const res = await worker.fetch(call("/api/tryon", { person: PNG, garments: [PNG] }), env());
     expect(res.status).toBe(200);

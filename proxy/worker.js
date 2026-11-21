@@ -309,7 +309,7 @@ BACKGROUND AND LIGHT: plain light warm-grey seamless studio background, soft eve
 }
 
 function catalog(items) {
-  return items.map((i) => ({ id: i.id, type: PART_NAMES[i.part], name: i.name, brand: i.brand, color: i.color, secondaryColor: i.secondaryColor, tone: i.tone, tags: i.tags }));
+  return items.map((i) => ({ id: i.id, type: PART_NAMES[i.part], kind: i.kind, name: i.name, brand: i.brand, color: i.color, secondaryColor: i.secondaryColor, tone: i.tone, tags: i.tags }));
 }
 
 function profileText(p) {
@@ -346,6 +346,48 @@ const STYLIST_RULES = `- Colour proportions: one dominant colour (about 60% of t
 - Formality: keep all pieces within one step of formality (a blazer with jeans works; a blazer with sweatpants only for a streetwear profile). Shoes match the formality and either echo a colour of the outfit or stay neutral.
 - Texture: in tonal or neutral outfits mix a smooth fabric with a textured one so the look is not flat.
 - Wardrobe items may have "tone": the colour measured on the phone (light/medium/dark, warm/cool, neutral or accent, and whether it is in the person's palette or close to a colour to avoid near the face). Trust "tone" over your own reading of hex codes.`;
+
+// The weather the phone read from the person's own words in «Повод и погода» (src/lib/weather.js):
+// { temp, feels, wind, rain, snow, level }. These rules come after the stylist rules and win over them:
+// «+6 и ветрено» once gave a t-shirt and no jacket. Without words: the usual weather of the date and country.
+const WEATHER_LEVELS = ["frost", "cold", "cool", "mild", "warm"];
+const COUNTRY_NAMES = { be: "Belgium", nl: "the Netherlands", fr: "France", de: "Germany", lu: "Luxembourg", at: "Austria", es: "Spain", it: "Italy", pt: "Portugal", ie: "Ireland", pl: "Poland", gb: "the United Kingdom", us: "the United States" };
+const WEATHER_RULES = {
+  frost: "Freezing: every outfit MUST include a warm coat or jacket from the wardrobe (a blazer is not enough). Warm tops (sweaters, hoodies, sweatshirts, long sleeves); no shorts, skirts without tights or t-shirts without a warm layer; closed warm shoes, boots best; a scarf or a beanie is a good accessory.",
+  cold: "Cold: every outfit MUST include a coat or jacket from the wardrobe (a blazer alone is not enough). Prefer warm tops (sweaters, hoodies, sweatshirts, long sleeves, shirts) over t-shirts; long trousers or jeans, no shorts; closed shoes.",
+  cool: "Cool: include a jacket or coat when the wardrobe has one (a blazer also works); long trousers or jeans; no shorts or sandals.",
+  mild: "Mild: outerwear is optional, a light layer at most.",
+  warm: "Warm: no coats or jackets; light, breathable pieces; no knitwear.",
+};
+function weatherText(input) {
+  const w = input?.weather && typeof input.weather === "object" ? input.weather : null;
+  const level = WEATHER_LEVELS.includes(w?.level) ? w.level : "";
+  if (!w || (!level && w.wind !== true && w.rain !== true && w.snow !== true)) {
+    const country = COUNTRY_NAMES[input?.country];
+    return `WEATHER\n- Not given. Dress for the usual weather on this date${country ? ` in ${country}` : ""}: in the cold months of the year (in Europe usually November to March) add a coat or jacket from the wardrobe.`;
+  }
+  const deg = (v) => (Number.isFinite(v) ? `${v > 0 ? "+" : ""}${Math.round(Math.max(-40, Math.min(50, v)))} °C` : "");
+  const temp = deg(w.temp);
+  const feels = deg(w.feels);
+  const conditions = [w.wind === true ? "windy" : "", w.rain === true ? "rain" : "", w.snow === true ? "snow" : ""].filter(Boolean).join(", ");
+  const lines = [
+    `- ${[temp ? `About ${temp}${feels && feels !== temp ? ` (feels like ${feels})` : ""}` : "", conditions].filter(Boolean).join("; ") || "As described in the occasion"}.`,
+    level ? `- ${WEATHER_RULES[level]}` : "",
+    w.rain === true ? "- Rain: a jacket or coat, closed shoes, no suede." : "",
+    w.snow === true ? "- Snow: warm closed shoes, boots best." : "",
+    w.wind === true ? "- Wind: a closed outer layer; a scarf works well." : "",
+    "- These weather rules come first, before the stylist rules above.",
+  ].filter(Boolean);
+  return `WEATHER (from the person's own words)\n${lines.join("\n")}`;
+}
+
+// «Простая» palette (src/lib/palette-mode.js): plain everyday colours only, named plainly.
+function colorsText(input, task) {
+  if (input?.colors !== "simple") return "";
+  return task === "gaps"
+    ? `COLOURS: the person chose a SIMPLE palette. Suggest only pieces in plain classic colours: the colours of their palette in the profile, black, white, grey, beige, navy, brown, khaki or denim blue. Never suggest dusty, muted or mixed shades (dusty berry, mauve, terracotta, sage, petrol, mustard). In "item" name the colour with one plain everyday Russian word (чёрный, белый, серый, бежевый, тёмно-синий, коричневый, хаки, бордовый, зелёный).`
+    : "COLOURS: the person chose a SIMPLE palette: build outfits on plain classic colours (black, white, grey, beige, navy, brown, denim) with at most one plain accent, and name colours in plain everyday words in the title and why.";
+}
 
 // The refresh sheet in «Покупки»: categories the person wants, a budget per piece, a mood, own words.
 const WISH_CATEGORIES = {
@@ -777,10 +819,13 @@ ${feedbackText(fb, items)}
 
 ${occasion ? `OCCASION / WEATHER: ${quote(occasion)}\n` : ""}HOW A STYLIST BUILDS AN OUTFIT
 ${STYLIST_RULES}
+${colorsText(input, "plan")}
+
+${weatherText(input)}
 
 TASK
 Create ${n} distinct, wearable outfits, styled by the rules above.
-- Each outfit: exactly one bottom plus one top, OR one dress; optionally one outerwear layer, shoes and at most one accessory when they exist.
+- Each outfit: exactly one bottom plus one top, OR one dress; one outerwear layer when the weather needs it (otherwise optional), shoes and at most one accessory when they exist. Use "kind" to tell a t-shirt from a sweater and a coat or jacket from a blazer.
 - Set "tuck": true when tucking the top in helps the proportions or suits the profile goal.
 - Respect "Never suggest" and learned rules strictly. Vary garment usage.
 - Do not repeat these recently rated combinations: ${shown.join(" | ") || "none"}.
@@ -820,6 +865,7 @@ ${feedbackText(fb, items)}
 
 ${wishesText(input)}
 ${replaceText(input)}
+${colorsText(input, "gaps")}
 
 For each piece: "item" = short Russian name in the form "colour + garment type" plus at most one detail (e.g. "Тёмные прямые джинсы"), "why" = one sentence naming which owned pieces it goes with and what it adds (and why its colour suits the person when the palette is known), "pairsWith" = ids of owned items it combines with, "priority" = high/medium/low, "part" = its category, "kind" = its exact type as one short lowercase English noun (e.g. "blazer", "shirt", "hoodie", "jeans", "boots", "bag", "chain"), "color" = its main colour as #rrggbb, "query" = a short English search query for online clothing shops (type, colour, fit, material; add "men" or "women" from the profile gender, or only if the wardrobe makes it obvious). "summary" = 1-2 sentences about the wardrobe. Clothing, shoes and accessories only; no brands or prices. Write everything except "query" in Russian.`;
       // a bit more randomness than before, so «обновить» brings new pieces

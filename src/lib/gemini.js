@@ -91,15 +91,17 @@ export async function tryOnOutfit({ person, garments, items = [], tuck }) {
   return toBlob(out);
 }
 
-export async function planTask({ items, profile, feedback, learned, occasion, count }) {
-  return task("plan", { wardrobe: items.map(plainItem), profile, feedback, learned, occasion, count });
+// weather: { temp, feels, wind, rain, snow, level } read on the phone from the person's words, or null;
+// colors: "simple" | "extended" palette; country: id from src/lib/countries.js (for the usual weather).
+export async function planTask({ items, profile, feedback, learned, occasion, count, weather = null, colors = "", country = "" }) {
+  return task("plan", { wardrobe: items.map(plainItem), profile, feedback, learned, occasion, count, weather, colors, country });
 }
 
 // wishes: { categories, budget, style, note } from the refresh sheet; shown / dismissed / bought: names
 // of pieces suggested before, closed with ×, and bought, so the next suggestions are different.
 // replace: { name, part, kind, color, outfit } — a piece of an outfit to replace with something different.
-export async function gapsTask({ items, profile, feedback, learned, wishes = null, shown = [], dismissed = [], bought = [], replace = null }) {
-  return task("gaps", { wardrobe: items.map(plainItem), profile, feedback, learned, wishes, shown, dismissed, bought, replace });
+export async function gapsTask({ items, profile, feedback, learned, wishes = null, shown = [], dismissed = [], bought = [], replace = null, colors = "" }) {
+  return task("gaps", { wardrobe: items.map(plainItem), profile, feedback, learned, wishes, shown, dismissed, bought, replace, colors });
 }
 
 export async function learnTask({ comment, outfitItems, liked, rules }) {

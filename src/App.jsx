@@ -10,6 +10,7 @@ import { normalizeImage } from "./lib/image.js";
 import { kindOf } from "./lib/kinds.js";
 import { FIT_OPTIONS, getBody, parseSize, sizeLabel, sizeOptions, sizeSystem } from "./lib/sizes.js";
 import { Onboarding, isOnboardingDone } from "./onboarding.jsx";
+import { getActivePalette } from "./lib/palette-mode.js";
 import { PaletteView } from "./palette.jsx";
 import { SettingsView } from "./settings-panel.jsx";
 import { ShoppingView } from "./shopping.jsx";
@@ -720,6 +721,8 @@ export function App() {
     Promise.all([isOnboardingDone(), getSettings()]).then(([done, s]) => {
       if (!done) setOnboarding({ needsAccess: !(s.proxyUrl && s.accessCode) });
     });
+    // a palette saved before «Простая / Расширенная»: the stylist's profile line follows the mode from the start
+    getActivePalette().catch(() => {});
   }, []);
 
   useEffect(() => {

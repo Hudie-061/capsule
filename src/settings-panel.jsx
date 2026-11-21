@@ -1,7 +1,8 @@
 // «Профиль»: palette and reminder entry points, style profile, what the stylist learned,
 // the try-on photo and access to the owner's server.
 import { useEffect, useRef, useState } from "react";
-import { clearTryOns, getPalette, getTiming } from "./lib/daily.js";
+import { clearTryOns, getTiming } from "./lib/daily.js";
+import { getActivePalette } from "./lib/palette-mode.js";
 import { checkConnection } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
 import { clearFeedback, EMPTY_PROFILE, getFeedback, getLearned, getModelReference, getProfile, getSettings, saveLearned, saveProfile, saveSettings, setModelReference } from "./lib/settings.js";
@@ -108,7 +109,7 @@ export function SettingsView({ items = [], focus, onOpen, onToast, onRestartOnbo
     getSettings().then(setSettings);
     getProfile().then(setProfile);
     getLearned().then(setLearned);
-    getPalette().then(setPalette);
+    getActivePalette().then((result) => setPalette(result ? { result } : null)); // swatches of the chosen mode
     getTiming().then(setTiming);
     getFeedback().then(setFeedback);
     getBody().then(setBody);

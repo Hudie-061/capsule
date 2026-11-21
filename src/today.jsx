@@ -3,13 +3,16 @@
 // Back of the card: the mannequin with callouts, or an AI try-on on your photo.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { clearTryOns, defaultMode, formatDay, getDayPlan, getPalette, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
+import { clearTryOns, defaultMode, formatDay, getDayPlan, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
 import { SetupError, tryOnOutfit } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
 import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
-import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, saveLearned, setModelReference } from "./lib/settings.js";
+import { addFeedback, amendFeedback, getFeedback, getLearned, getModelReference, getProfile, getSettings, saveLearned, setModelReference } from "./lib/settings.js";
+import { getActivePalette } from "./lib/palette-mode.js";
+import { dressForWeather, readWeather } from "./lib/weather.js";
 import { learnFromComment, planOutfits } from "./lib/stylist.js";
 import { kindOf } from "./lib/kinds.js";
+import { contrastLevel, paletteLab } from "./lib/colors.js";
 import { Crossfade, GarmentIcon, HintChips, Icon, Segmented, Sheet, SwapIcon, WaitLine, isDressItem } from "./ui.jsx";
 
 // What the stylist does while the outfits are being made (shown step by step while waiting).
@@ -31,7 +34,8 @@ const SWAP_TITLE = { wholebody_up: "Заменить верхнюю одежду
 
 // Outerwear (not a dress), and the layers people take off indoors: a coat over a top, scarves, headwear.
 const isOuter = (p) => p.part === "wholebody_up" && !isDressItem(p);
-const isOutdoorLayer = (p, pieces) => (isOuter(p) && pieces.some((q) => q.part === "upperbody")) || (p.part === "accessories_up" && ["scarf", "cap", "hat", "beanie"].includes(kindOf(p)));
+// A blazer stays on indoors.
+const isOutdoorLayer = (p, pieces) => (isOuter(p) && kindOf(p) !== "blazer" && pieces.some((q) => q.part === "upperbody")) || (p.part === "accessories_up" && ["scarf", "cap", "hat", "beanie"].includes(kindOf(p)));
 // A piece can be left out when what remains is still a full outfit.
 const canRemove = (p, pieces) => (isOuter(p) || p.part === "accessories_up") && isWearable(pieces.filter((q) => q.id !== p.id));
 
@@ -108,6 +112,15 @@ function Mannequin({ board, pieces, body, open, onToggle, onPick }) {
   );
 }
 
+// What the phone understood from «Повод и погода», said back before the outfits are made again.
+const isWarmCoat = (p) => isOuter(p) && kindOf(p) !== "blazer";
+function WeatherLine({ text, hasOuter }) {
+  const w = readWeather(text);
+  if (!w.known) return <p className="tiny-text">Напиши градусы и погоду — например «+6, ветер», и я одену по погоде.</p>;
+  const plan = w.needOuter ? (hasOuter ? "в каждом образе будет куртка или пальто" : "куртки или пальто в гардеробе нет — добавь их через ＋") : w.noOuter ? "без куртки и пальто" : "верхняя одежда — по желанию";
+  return <p className="weather-line fade" key={w.label}><Icon name="check" size={14} width={2.6} /> Понял: {w.label}{w.feels !== null && w.feels !== w.temp ? ` (ощущается как ${w.feels > 0 ? "+" : ""}${w.feels} °C)` : ""} — {plan}.</p>;
+}
+
 // ---- screen ---------------------------------------------------------------------------------
 export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpenAccess, onToast }) {
   const [mode, setMode] = useState(null);
@@ -177,7 +190,13 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     setStatus("loading"); setError(""); setFlipped(false); setCalloutsOpen(false);
     try {
       const when = `${evening ? "Образ на завтра" : "Образ на сегодня"}, ${formatDay(date).toLowerCase()}`;
-      const outfits = await planOutfits({ items: itemsRef.current, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(), occasion: occasion ? `${when}. ${occasion}` : when, count: 5, palette: (await getPalette())?.result || null });
+      // the weather only from the person's own words; the palette in the chosen mode (simple or extended)
+      const palette = await getActivePalette();
+      const outfits = await planOutfits({
+        items: itemsRef.current, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(),
+        occasion: occasion ? `${when}. ${occasion}` : when, count: 5, palette,
+        weather: readWeather(occasion), source: occasion, colors: palette?.mode || "", country: (await getSettings()).country,
+      });
       if (!outfits.length) throw new Error("Не получилось собрать образ. Добавь ещё вещей или попробуй снова.");
       const next = { outfits, index: 0, chosen: null, occasion };
       await saveDayPlan(date, next);
@@ -198,9 +217,18 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     let alive = true;
     ticketRef.current += 1;
     setPlan(null); setFlipped(false); setCalloutsOpen(false); setLikeAt(null); setLikeReasons(new Set());
-    getDayPlan(date).then((saved) => {
+    Promise.all([getDayPlan(date), getActivePalette().catch(() => null)]).then(([saved, palette]) => {
       if (!alive) return;
-      const clean = cleanPlan(saved, new Map(itemsRef.current.map((i) => [i.id, i])));
+      let clean = cleanPlan(saved, new Map(itemsRef.current.map((i) => [i.id, i])));
+      // A plan made before the weather check (or by an older Worker): «+6 и ветрено» without a jacket gets
+      // one from the wardrobe now, without asking the stylist again. Outfits edited by hand stay as they are.
+      if (clean?.occasion) {
+        const outfits = dressForWeather(clean.outfits, itemsRef.current, readWeather(clean.occasion), { source: clean.occasion, pal: palette ? paletteLab(palette) : null, contrast: contrastLevel(palette?.contrast) });
+        if (outfits.some((o, i) => o !== clean.outfits[i] && o.itemIds.join("+") !== clean.outfits[i].itemIds.join("+"))) {
+          clean = { ...clean, outfits, chosen: null };
+          saveDayPlan(date, clean);
+        }
+      }
       if (clean) { setPlan(clean); setStatus("idle"); }
       else if (enough && setupReady) generate(saved?.occasion || "");
       else setStatus("idle");
@@ -624,6 +652,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
           <span>Куда идёшь, какая погода</span>
           <input value={occasionDraft} onChange={(e) => setOccasionDraft(e.target.value)} placeholder="Учёба, +8 и дождь" maxLength={140} />
         </label>
+        <WeatherLine text={occasionDraft} hasOuter={items.some(isWarmCoat)} />
         <div className="chip-row">
           {OCCASION_CHIPS.map((c) => <button type="button" key={c} className="chip" onClick={() => setOccasionDraft((v) => (v.trim() ? `${v.trim().replace(/,$/, "")}, ${c.toLowerCase()}` : c))}>{c}</button>)}
         </div>
