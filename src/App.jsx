@@ -11,6 +11,7 @@ import { kindOf } from "./lib/kinds.js";
 import { FIT_OPTIONS, getBody, parseSize, sizeLabel, sizeOptions, sizeSystem } from "./lib/sizes.js";
 import { Onboarding, isOnboardingDone } from "./onboarding.jsx";
 import { getActivePalette } from "./lib/palette-mode.js";
+import { brandLatin } from "./lib/brands.js";
 import { PaletteView } from "./palette.jsx";
 import { SettingsView } from "./settings-panel.jsx";
 import { ShoppingView } from "./shopping.jsx";
@@ -687,6 +688,7 @@ export function App() {
   const [items, setItems] = useState([]);
   const [activeType, setActiveType] = useState("all");
   const [shelf, setShelf] = useState("have"); // «Есть» or «Хочу купить» in «Гардероб»
+  const [trialId, setTrialId] = useState(null); // «Примерить»: a piece from «Хочу купить» tried with the wardrobe
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -740,6 +742,7 @@ export function App() {
 
   const go = useCallback((next, options = {}) => {
     setTab(next);
+    setTrialId(null);
     setSub(options.sub || null);
     setBackTo(options.backTo || null);
     setSelectedId(null);
@@ -794,9 +797,17 @@ export function App() {
     setShelf("want");
     showToast(`В «Хочу купить»: ${records.length} ${plural(records.length, ["вещь", "вещи", "вещей"])}`);
   };
-  const findWish = (item) => go("shopping", {
-    focus: { label: item.name, part: item.part, kind: item.kind, color: item.color, query: item.query, from: "wish", why: item.wishNote ? `Из «Хочу купить»: ${item.wishNote}` : "Из «Хочу купить» — ищу такую же вещь в магазинах." },
-  });
+  // With a brand («Tommy Hilfiger»): the same piece of that brand first, then look-alikes of other brands.
+  const findWish = (item) => {
+    const brand = brandLatin(item.brand);
+    const why = brand
+      ? `Ищу ${brand}: такую же вещь — в магазинах этой марки и по ценам во всех магазинах, а в «Похожие дешевле» — такие же вещи других марок.`
+      : "Из «Хочу купить» — выбери магазин: откроется поиск похожей вещи с твоим размером и фильтрами.";
+    go("shopping", { focus: { label: item.name, part: item.part, kind: item.kind, color: item.color, query: item.query, brand, from: "wish", why: item.wishNote ? `${why} Твоя записка: ${item.wishNote}` : why } });
+  };
+  // «Примерить»: outfits of the wished piece with what the person owns (the outfit card of «Сегодня»).
+  const trialItem = trialId ? wantItems.find((item) => item.id === trialId) || null : null;
+  const tryWish = (item) => { setTrialId(item.id); setSelectedId(null); window.scrollTo({ top: 0 }); };
 
   const deleteItem = async (id) => {
     if (id.startsWith("import-")) {
@@ -834,14 +845,18 @@ export function App() {
 
   return (
     <div className={`app-shell${selectedItem ? " has-selection" : ""}`}>
-      <main className="app-main" key={`${tab}:${sub || ""}`}>
+      <main className="app-main" key={`${tab}:${sub || ""}:${trialItem?.id || ""}`}>
         {tab === "today" && <TodayView items={haveItems} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast} />}
         {tab === "shopping" && <ShoppingView items={haveItems} setupReady={setupReady} focus={shopping.focus} refreshKey={shopping.refreshKey} onOpenAccess={openAccess} onOpenSizes={() => go("profile", { sub: "sizes", backTo: "shopping" })} />}
         {tab === "profile" && !sub && <SettingsView items={haveItems} focus={profileFocus} onOpen={(next) => setSub(next)} onToast={showToast} onRestartOnboarding={() => setOnboarding({ needsAccess: !setupReady })} />}
         {tab === "profile" && sub === "palette" && <PaletteView setupReady={setupReady} onOpenAccess={openAccess} onBack={() => setSub(null)} onFindClothes={() => go("shopping", { refresh: true })} />}
         {tab === "profile" && sub === "timing" && <TimingView onBack={() => setSub(null)} onToast={showToast} />}
         {tab === "profile" && sub === "sizes" && <SizesView onBack={() => (backTo ? go(backTo) : setSub(null))} onToast={showToast} />}
-        {tab === "wardrobe" && (
+        {tab === "wardrobe" && trialItem && (
+          <TodayView items={haveItems} trial={trialItem} loaded={!loading} setupReady={setupReady} onNavigate={go} onAdd={addItems} onOpenAccess={openAccess} onToast={showToast}
+            onCloseTrial={() => setTrialId(null)} onFindTrial={findWish} onBoughtTrial={(item) => { setTrialId(null); moveItem(item, false); }} />
+        )}
+        {tab === "wardrobe" && !trialItem && (
           <section className="screen screen--wide wardrobe">
             <div className="wardrobe-head rise">
               <h1 className="screen-title">Гардероб</h1>
@@ -851,7 +866,7 @@ export function App() {
               options={[{ id: "have", label: `Есть · ${haveItems.length}` }, { id: "want", label: `Хочу купить · ${wantItems.length}` }]} />
             {shelf === "want" ? (
               <WishShelf items={wantItems} setupReady={setupReady} onOpenAccess={openAccess} onOpen={setSelectedId}
-                onFind={findWish} onBought={(item) => moveItem(item, false)} onAdded={addWishes} />
+                onFind={findWish} onTry={tryWish} canTry={haveItems.length > 0} onBought={(item) => moveItem(item, false)} onAdded={addWishes} />
             ) : (<>
             <nav className="category-pills" aria-label="Фильтр по типу вещей">
               {TYPES.map((type) => (

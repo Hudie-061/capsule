@@ -190,12 +190,13 @@ export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGar
     setJobs((current) => current.filter((item) => item.id !== job.id));
   };
 
-  // The user's decision: picked items are added, the rest are dropped.
-  const addPicked = async () => {
+  // The user's decision: picked items are added — to the wardrobe or to «Хочу купить» — the rest are dropped.
+  // A wish is cut out like any piece, so it looks the same in outfits and on the mannequin when tried on.
+  const addPicked = async (want = false) => {
     setBusy(true); setError("");
     try {
       for (const job of toSelect) {
-        if (picked.has(job.id)) replace(await api(`${API}/${job.id}/add`, { method: "POST" }));
+        if (picked.has(job.id)) replace(await api(`${API}/${job.id}/add`, { method: "POST", body: JSON.stringify({ want }) }));
         else await drop(job);
       }
       setPicked(new Set());
@@ -246,11 +247,11 @@ export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGar
   let title = "Добавить вещи";
   let subtitle = "Сфотографируй вещь или себя в образе — найду каждую вещь на фото";
   if (setupRequired && !jobs.length) { title = "Нужен код доступа"; subtitle = ""; }
-  else if (toSelect.length) { title = `Нашёл ${toSelect.length} ${plural(toSelect.length, ITEMS)}`; subtitle = "Отметь, что добавить в гардероб. Без твоего выбора ничего не добавлю."; }
+  else if (toSelect.length) { title = `Нашёл ${toSelect.length} ${plural(toSelect.length, ITEMS)}`; subtitle = "Отметь вещи и выбери: они уже твои — в гардероб, или ты их хочешь — в «Хочу купить»."; }
   else if (detecting.length && !jobs.length) { title = "Ищу вещи на фото…"; subtitle = "Обычно это занимает несколько секунд"; }
   else if (inProgress.length) { title = `Оцифровываю ${inProgress.length} ${plural(inProgress.length, ITEMS)}`; subtitle = "Убираю фон и подписываю. Можно закрыть — работа продолжится."; }
   else if (attention.length) { title = "Нужна помощь"; subtitle = "С одной из вещей не получилось — посмотри ниже"; }
-  else if (done.length) { title = `Добавлено: ${done.length} ${plural(done.length, ITEMS)}`; subtitle = "Уже в гардеробе. Название и бренд можно поправить."; }
+  else if (done.length) { title = `Добавлено: ${done.length} ${plural(done.length, ITEMS)}`; subtitle = done.every((job) => job.libraryRecord?.want) ? "В «Хочу купить» — там можно примерить их со своими вещами." : "Название и бренд можно поправить."; }
 
   let pill = null;
   if (toSelect.length) pill = { icon: <span className="import-pill__count">{toSelect.length}</span>, text: "Выбери вещи" };
@@ -299,11 +300,12 @@ export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGar
               {detecting.map((item) => <span key={item.id} className="alt-card pick-card pick-card--loading"><span className="alt-card__image shimmer" /><span className="tiny-text">Ищу вещи…</span></span>)}
             </div>
             <div className="action-row">
-              <button type="button" className="btn btn--outline btn--grow1" disabled={busy} onClick={dropAllUnpicked}>Не добавлять</button>
-              <button type="button" className="btn btn--dark btn--grow2" disabled={busy || !chosen.length} onClick={addPicked}>
-                {chosen.length ? `Добавить ${chosen.length} ${plural(chosen.length, ITEMS)}` : "Ничего не выбрано"}
+              <button type="button" className="btn btn--outline btn--grow1" disabled={busy || !chosen.length} onClick={() => addPicked(true)}>Хочу купить</button>
+              <button type="button" className="btn btn--dark btn--grow1" disabled={busy || !chosen.length} onClick={() => addPicked(false)}>
+                {chosen.length ? `В гардероб · ${chosen.length}` : "Ничего не выбрано"}
               </button>
             </div>
+            <button type="button" className="text-button add-none" disabled={busy} onClick={dropAllUnpicked}>Ничего не добавлять</button>
           </>
         ) : active ? (
           <>
@@ -327,7 +329,7 @@ export const WardrobeImportFlow = forwardRef(function WardrobeImportFlow({ onGar
                       <span className="import-row__text">
                         <span className="strong-text">{job.libraryRecord?.name || job.metadata?.name || "Вещь"}</span>
                         <span className={`tiny-text${phase === "attention" ? " error-text" : ""}`}>
-                          {phase === "done" ? "В гардеробе" : phase === "attention" ? (garment?.failedAssetUrl ? "Фон убрался не до конца" : garment?.error || "Не получилось вырезать") : garment?.status === "processing" ? "Убираю фон…" : "В очереди"}
+                          {phase === "done" ? (job.libraryRecord?.want ? "В «Хочу купить»" : "В гардеробе") : phase === "attention" ? (garment?.failedAssetUrl ? "Фон убрался не до конца" : garment?.error || "Не получилось вырезать") : garment?.status === "processing" ? "Убираю фон…" : "В очереди"}
                         </span>
                       </span>
                       {phase === "done" && (

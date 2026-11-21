@@ -13,8 +13,9 @@
 //    weight — is added to the search; the chip turns it off.
 // 5. «Как сел размер?»: a few days after «Купил здесь» the app asks how the size fit and moves the
 //    saved size one step if it was too small or too big.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { chainLinks, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor } from "./lib/chains.js";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WISH_SHOPS, chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor } from "./lib/chains.js";
+import { brandLatin, isOfBrand, withBrand, withoutBrand } from "./lib/brands.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
 import { getGapsCache, inMonth, saveGapsCache } from "./lib/daily.js";
@@ -220,7 +221,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const gaps = useMemo(() => {
     const list = cache?.result?.items || [];
     if (focus?.replace) return [...alts.items, ...list];
-    return focus?.label ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, pairsWith: [], priority: "medium", why: focus.why || "Похожие вещи — новые и б/у.", focus: true, from: focus.from || "" }, ...list] : list;
+    return focus?.label ? [{ item: focus.label, part: focus.part, kind: focus.kind, color: focus.color, query: focus.query, brand: focus.brand || "", pairsWith: [], priority: "medium", why: focus.why || "Похожие вещи — новые и б/у.", focus: true, from: focus.from || "" }, ...list] : list;
   }, [cache, focus, alts]);
   const altsLoading = Boolean(focus?.replace) && alts.status === "loading";
   const gap = gaps[Math.min(selected, gaps.length - 1)] || null;
@@ -233,7 +234,23 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const pick = system ? sizePick(system, size) : null;
   // English only towards shops (the interface stays Russian); the person's gender is part of the query.
   const personGender = fit.body?.gender || fit.gender || "";
-  const baseQuery = gap ? shopQueryFor(gap, personGender) : "";
+  // A piece with a brand («Tommy Hilfiger» from «Хочу купить»): the first filter is the brand itself — the
+  // same piece, the brand in the query, the shops that sell it and the price search over all shops, without
+  // the budget; «Похожие дешевле» — the same kind of piece without the brand, in the usual shops and budget.
+  const brand = gap?.brand ? brandLatin(gap.brand) : "";
+  const brandChain = brand ? chainOf(brand) : null; // the brand is a chain itself (Zara, H&M…)
+  const alike = Boolean(brand) && filter === "chains";
+  const plainQuery = gap ? withoutBrand(shopQueryFor(gap, personGender), brand) : "";
+  const baseQuery = brand && !alike ? withBrand(plainQuery, brand) : plainQuery;
+  const budget = brand && !alike ? 0 : wishes.budget || 0;
+  // a branded piece opens on the brand; leaving it goes back to «Zalando · About You»
+  const brandGap = Boolean(brand);
+  const wasBrand = useRef(false);
+  useEffect(() => {
+    if (brandGap === wasBrand.current) return;
+    wasBrand.current = brandGap;
+    setFilter(brandGap ? "new" : "chains");
+  }, [brandGap]);
   // «Популярные» searches each chain without the size: in Google Shopping "size 50" pulls in second-hand
   // listings that mention the size, and the chains show every size on the product page anyway.
   // «Все новые» and «Б/у» search all shops once, with the size when the chip is on.
@@ -248,7 +265,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   // Offers for the selected piece in the selected country. A paid search runs only when the person taps
   // «Сравнить цены» (one search per shop, so tapping through the cards no longer spends the budget);
   // an answer from the last day is shown right away, and the filtered Zalando link is always there.
-  const searchKey = gap && country ? offersKey(country, mode, query, saleOnly) + (wishes.budget ? `:max${wishes.budget}` : "") : "";
+  const searchKey = gap && country ? offersKey(country, mode, query, saleOnly) + (budget ? `:max${budget}` : "") : "";
   const [askedKey, setAskedKey] = useState("");
   useEffect(() => {
     if (!query || !country || !setupReady || !gap) return undefined;
@@ -263,7 +280,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       setOffers({ status: "loading", data: null, error: "" });
       try {
         const want = { name: gap.item, kind: kindOf(gap), color: gap.color, gender: personGender };
-        const data = await pricesTask({ query, country, want, sale: saleOnly, maxPrice: wishes.budget || 0, chains: mode === "chains" ? searchChains(gap) : [] });
+        const data = await pricesTask({ query, country, want, sale: saleOnly, maxPrice: budget, chains: mode === "chains" ? searchChains(gap) : [] });
         if (!alive) return;
         await kv.set(key, data);
         setOffers({ status: "done", data, error: "" });
@@ -281,8 +298,11 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
     const all = offers.data?.offers || [];
     if (filter === "chains") return chainOffers(all, { perChain: 5, max: 10 });
     const same = all.filter((o) => o.condition === filter).slice(0, 12);
-    return filter === "new" ? shopOrder(same) : same; // second-hand stays cheapest first
-  }, [offers.data, filter]);
+    const ordered = filter === "new" ? shopOrder(same) : same; // second-hand stays cheapest first
+    // the brand's own pieces first, then the look-alikes of other brands
+    return brand ? [...ordered.filter((o) => isOfBrand(`${o.title} ${o.store}`, brand)), ...ordered.filter((o) => !isOfBrand(`${o.title} ${o.store}`, brand))] : ordered;
+  }, [offers.data, filter, brand]);
+  const brandCount = brand && !alike ? list.filter((o) => isOfBrand(`${o.title} ${o.store}`, brand)).length : -1;
   const maxTotal = list.length ? Math.max(...list.map((o) => o.total)) : 0;
   // The cheapest offer gets «Лучшая цена», wherever Zalando-first ordering puts it.
   const best = list.reduce((a, b) => (!a || b.total < a.total ? b : a), null);
@@ -373,14 +393,26 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   // Free links: search on the chains' own sites (or second-hand sites for «Б/у»), plus Google Shopping.
   // Zalando's link carries the filters: the person's size, cheapest first, sale only and the budget.
   const linkCountry = country || "be";
-  const linkFilters = { size: system && pick != null ? { system, pick } : null, sale: saleOnly, budget: wishes.budget || 0 };
+  const linkFilters = { size: system && pick != null ? { system, pick } : null, sale: saleOnly, budget };
   // Shop tiles (free): each opens the shop's own search with the filters it understands, described on the tile.
+  // A piece from «Хочу купить» («Найти похожую»): Zara, H&M, Zalando, Uniqlo and SHEIN first, all five shown.
+  const fromWish = gap?.from === "wish";
+  // «Такой же»: the shops that sell the brand (Zalando and About You; the chain's own site when the brand is
+  // a chain) and Google Shopping — all shops at once
+  const sameIds = brandChain ? [brandChain.id] : ["zalando", "aboutyou"];
+  const brandTiles = brand && !alike && filter !== "used";
   const links = filter === "used"
     ? storeLinks(linkCountry).filter((s) => s.cond === "used").map((s) => ({ ...s, href: s.url(shownQuery), notes: ["б/у", "поиск на сайте"] }))
-    : [
-      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters, money: (n) => money(n, currency) }).map((c) => ({ ...c, cond: "new", href: c.url })),
+    : brandTiles ? [
+      ...chainLinks(linkCountry, brandChain ? plainQuery : baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters, money: (n) => money(n, currency), prefer: sameIds })
+        .filter((c) => sameIds.includes(c.id)).map((c) => ({ ...c, cond: "new", href: c.url })),
+      ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery), notes: [`${brand} во всех магазинах`] })),
+    ] : [
+      ...chainLinks(linkCountry, baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters, money: (n) => money(n, currency), prefer: fromWish ? WISH_SHOPS : null }).map((c) => ({ ...c, cond: "new", href: c.url })),
       ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery), notes: ["все магазины сразу"] })),
     ];
+  const firstTiles = brandTiles ? links.length : fromWish && filter !== "used" ? WISH_SHOPS.length : 4;
+  const filters = brand ? [{ id: "new", label: brand }, { id: "chains", label: "Похожие дешевле" }, { id: "used", label: "Б/у" }] : FILTERS;
 
   return (
     <section className="screen shopping">
@@ -445,7 +477,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                 <button type="button" className={`gap-card${i === selected ? " is-on" : ""}`} aria-pressed={i === selected} onClick={() => { setSelected(i); setBought(""); }}>
                   <span className="gap-card__icon"><GarmentIcon item={g} size={52} /></span>
                   <span className="gap-card__name">{g.item}</span>
-                  <span className="gap-card__impact">{g.replaceOf ? "вместо твоей" : g.from === "wish" ? "хочу купить" : g.focus ? "из образа" : impact(g, items)}</span>
+                  <span className="gap-card__impact">{g.replaceOf ? "вместо твоей" : g.from === "wish" ? (g.brand ? brandLatin(g.brand) : "хочу купить") : g.focus ? "из образа" : impact(g, items)}</span>
                 </button>
                 {!g.focus && <button type="button" className="gap-card__x" onClick={() => dismiss(g)} aria-label={`Больше не предлагать: ${g.item}`} title="Больше не предлагать"><Icon name="close" size={12} width={2.6} /></button>}
               </div>
@@ -473,7 +505,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           {size?.note && <span className="size-card__note my-size__note">{size.note}</span>}
         </div>
       )}
-      {gap && (
+      {gap && !(brand && !alike) && ( /* a branded piece: the budget applies to «Похожие дешевле» only */
         <div className={`budget-row fade${wishes.budgetSet ? "" : " is-asking"}`} role="group" aria-label="Бюджет на вещь">
           <span className="budget-row__label">{wishes.budgetSet ? "Бюджет на вещь" : "Сколько готов потратить на вещь?"}</span>
           <div className="budget-row__chips">
@@ -491,7 +523,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
         <>
           <div className="section-head">
             <div className="filter-row" role="group" aria-label="Состояние">
-              {FILTERS.map((f) => <button type="button" key={f.id} className={`filter-pill${filter === f.id ? " is-on" : ""}`} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>{f.label}</button>)}
+              {filters.map((f) => <button type="button" key={f.id} className={`filter-pill${filter === f.id ? " is-on" : ""}`} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>{f.label}</button>)}
             </div>
           </div>
           <div className="sale-row">
@@ -503,9 +535,12 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
 
           {links.length > 0 && (
             <div className="shop-tiles-block">
-              <span className="tiny-text">{filter === "used" ? "Сайты б/у — бесплатно, сразу с поиском этой вещи" : "Магазины — бесплатно, откроются уже с твоими фильтрами"}</span>
+              <span className={(fromWish || brand) && filter !== "used" ? "section-label" : "tiny-text"}>{filter === "used" ? (brand ? `${brand} б/у — сайты объявлений, сразу с поиском` : "Сайты б/у — бесплатно, сразу с поиском этой вещи") : brandTiles ? `Такой же — ${brand}` : alike ? "Похожие подешевле — без марки" : fromWish ? "Найти похожую — выбери магазин" : "Магазины — бесплатно, откроются уже с твоими фильтрами"}</span>
+              {brandTiles && <span className="tiny-text">{brandChain ? `На сайте ${brandChain.name}` : "Магазины, где продают эту марку"} и Google — все магазины сразу. Откроются с поиском «{brand}», твоим полом и размером.</span>}
+              {alike && <span className="tiny-text">Та же вещь без марки: тип, цвет, твой пол, размер и бюджет — где магазин это понимает.</span>}
+              {fromWish && !brand && filter !== "used" && <span className="tiny-text">Откроется поиск этой вещи: тип, цвет, твой пол и размер — где магазин это понимает.</span>}
               <div className="shop-tiles" role="list" aria-label="Магазины">
-                {(allShops ? links : links.slice(0, 4)).map((s, i) => {
+                {(allShops ? links : links.slice(0, firstTiles)).map((s, i) => {
                   const [badge, color] = BRAND[s.id] || [s.name.replace(/[^A-Za-zА-Яа-я0-9]/g, "").slice(0, 2), "#574D44"];
                   return (
                     <a role="listitem" key={s.id} className={`shop-tile rise${s.id === "zalando" ? " is-main" : ""}`} style={{ animationDelay: `${i * 0.03}s` }} href={s.href} target="_blank" rel="noopener noreferrer">
@@ -518,8 +553,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                     </a>
                   );
                 })}
-                {links.length > 4 && (
-                  <button type="button" className="shop-more" onClick={() => setAllShops(!allShops)} aria-expanded={allShops}>{allShops ? "Свернуть" : `Ещё ${links.length - 4}`}</button>
+                {links.length > firstTiles && (
+                  <button type="button" className="shop-more" onClick={() => setAllShops(!allShops)} aria-expanded={allShops}>{allShops ? "Свернуть" : `Ещё ${links.length - firstTiles}`}</button>
                 )}
               </div>
             </div>
@@ -528,15 +563,15 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
           {offers.status === "idle" && (
             <div className="price-cta">
               <button type="button" className="btn btn--dark btn--block" onClick={() => setAskedKey(searchKey)}>
-                <Icon name="bag" size={18} width={2} /> {mode === "chains" ? "Сравнить цены на Zalando и About You" : "Найти цены во всех магазинах"}
+                <Icon name="bag" size={18} width={2} /> {mode === "chains" ? (alike ? "Похожие на Zalando и About You" : "Сравнить цены на Zalando и About You") : brand && filter === "new" ? `Найти ${brand} во всех магазинах` : "Найти цены во всех магазинах"}
               </button>
-              <span className="tiny-text">{mode === "chains" ? `${searchChains(gap).length} поиска` : "1 поиск"} из общего лимита · ответ хранится сутки · магазины выше — бесплатно</span>
+              <span className="tiny-text">{mode === "chains" ? `${searchChains(gap).length} поиска` : "1 поиск"} из общего лимита · ответ хранится сутки · магазины выше — бесплатно{brand && !alike ? " · сначала эта марка, потом похожие" : ""}</span>
             </div>
           )}
 
           {offers.status === "loading" && (
             <>
-              <WaitLine phrases={mode === "chains" ? ["Ищу на Zalando и About You…", "Проверяю, что это та же вещь…", "Считаю цену с доставкой…"] : ["Ищу во всех магазинах…", "Проверяю, что это та же вещь…", "Считаю цену с доставкой…"]} />
+              <WaitLine phrases={mode === "chains" ? ["Ищу на Zalando и About You…", "Проверяю, что это та же вещь…", "Считаю цену с доставкой…"] : [brand ? `Ищу ${brand} во всех магазинах…` : "Ищу во всех магазинах…", "Проверяю, что это та же вещь…", "Считаю цену с доставкой…"]} />
               <div className="offer-list">{[0, 1, 2].map((i) => <span key={i} className="offer offer--skeleton shimmer" />)}</div>
             </>
           )}
@@ -547,8 +582,11 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                 {list.map((o, i) => {
                   const id = idOf(o);
                   const off = discount(o);
+                  const group = brandCount < 0 ? "" : i === 0 && brandCount > 0 ? `${brand} — эта марка` : i === brandCount ? (brandCount ? "Похожие других марок" : `${brand} не нашлось — похожие других марок`) : "";
                   return (
-                    <div key={id} className={`offer rise${o === best ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.03}s` }}>
+                    <Fragment key={id}>
+                    {group && <span className="offer-group">{group}</span>}
+                    <div className={`offer rise${o === best ? " is-best" : ""}`} style={{ animationDelay: `${i * 0.03}s` }}>
                       <a className="offer__main" href={direct[id] || offerFallback(o, linkCountry, gender)} target="_blank" rel="noopener noreferrer" onClick={(e) => openOffer(e, o)} aria-busy={opening === id}>
                         <span className="offer__icon">{o.image ? <img src={o.image} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <GarmentIcon item={gap} size={38} />}</span>
                         <span className="offer__text">
@@ -572,6 +610,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                         {bought === id ? <><Icon name="check" size={14} width={2.4} /> Отмечено</> : "Купил здесь"}
                       </button>
                     </div>
+                    </Fragment>
                   );
                 })}
               </div>
@@ -581,7 +620,7 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
                   ? "Со скидкой такой вещи сейчас не нашлось. Выключи «Только со скидкой» или поищи прямо на сайтах."
                   : filter === "chains"
                   ? "На Zalando и About You такой вещи не нашлось. Открой магазины выше или посмотри «Все новые»."
-                  : filter === "new" ? "Новых предложений нет — посмотри «Б/у» или сайты магазинов." : "Б/у предложений нет — поищи на сайтах ниже."}
+                  : filter === "new" ? (brand ? `${brand} в магазинах не нашлось. Открой магазины выше или посмотри «Похожие дешевле» и «Б/у».` : "Новых предложений нет — посмотри «Б/у» или сайты магазинов.") : "Б/у предложений нет — поищи на сайтах ниже."}
               </p>
             )
           )}

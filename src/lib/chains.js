@@ -175,11 +175,16 @@ function linkNotes(id, own, { size = null, sale = false, budget = 0 } = {}, g = 
 // The shop tiles in «Покупки»: every shop's own search with the filters it understands (free).
 // Zalando, About You and SHEIN first (the marketplaces), shoe chains for shoes, then the chains.
 // `money` formats the budget in the country's currency for the tile.
-export function chainLinks(country, query, { shoes = false, gender = "", filters = {}, money } = {}) {
+// «Найти похожую» from «Хочу купить» (the owner, 21.11.2026): these five shops first, in this order.
+export const WISH_SHOPS = ["zara", "hm", "zalando", "uniqlo", "shein"];
+
+// `prefer`: shop ids to put first, in that order (the rest follow as usual).
+export function chainLinks(country, query, { shoes = false, gender = "", filters = {}, money, prefer = null } = {}) {
   const s = shopQuery(query);
   const g = queryGender(query, gender);
   const list = CHAINS.filter((c) => c.own && (!c.shoes || shoes));
-  const rank = (c) => (c.id === "zalando" ? 0 : c.id === "aboutyou" ? 1 : c.id === "shein" ? 2 : c.shoes ? 3 : 4);
+  const usual = (c) => (c.id === "zalando" ? 0 : c.id === "aboutyou" ? 1 : c.id === "shein" ? 2 : c.shoes ? 3 : 4);
+  const rank = (c) => (prefer?.includes(c.id) ? prefer.indexOf(c.id) - 100 : usual(c));
   return [...list].sort((a, b) => rank(a) - rank(b)).map((c) => {
     const own = c.search?.(country, s, g, filters) || "";
     return { id: c.id, name: c.name, url: own || googleInside(c, country, s), own: Boolean(own), notes: linkNotes(c.id, Boolean(own), filters, g, money).filter(Boolean) };

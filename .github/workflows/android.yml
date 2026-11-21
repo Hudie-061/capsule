@@ -31,6 +31,7 @@ jobs:
       - name: Create Android project
         run: |
           npx cap add android
+          bash scripts/android-permissions.sh
           npx cap sync android
           bash scripts/android-icons.sh
       - name: Build APK

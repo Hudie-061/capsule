@@ -93,8 +93,9 @@ export async function tryOnOutfit({ person, garments, items = [], tuck }) {
 
 // weather: { temp, feels, wind, rain, snow, level } read on the phone from the person's words, or null;
 // colors: "simple" | "extended" palette; country: id from src/lib/countries.js (for the usual weather).
-export async function planTask({ items, profile, feedback, learned, occasion, count, weather = null, colors = "", country = "" }) {
-  return task("plan", { wardrobe: items.map(plainItem), profile, feedback, learned, occasion, count, weather, colors, country });
+// include: the id of a piece from «Хочу купить» every outfit must have («Примерить»).
+export async function planTask({ items, profile, feedback, learned, occasion, count, weather = null, colors = "", country = "", include = "" }) {
+  return task("plan", { wardrobe: items.map(plainItem), profile, feedback, learned, occasion, count, weather, colors, country, ...(include ? { include } : {}) });
 }
 
 // wishes: { categories, budget, style, note } from the refresh sheet; shown / dismissed / bought: names

@@ -347,8 +347,9 @@ const STYLIST_RULES = `- Colour proportions: one dominant colour (about 60% of t
 - Texture: in tonal or neutral outfits mix a smooth fabric with a textured one so the look is not flat.
 - Wardrobe items may have "tone": the colour measured on the phone (light/medium/dark, warm/cool, neutral or accent, and whether it is in the person's palette or close to a colour to avoid near the face). Trust "tone" over your own reading of hex codes.`;
 
-// The weather the phone read from the person's own words in «Повод и погода» (src/lib/weather.js):
-// { temp, feels, wind, rain, snow, level }. These rules come after the stylist rules and win over them:
+// The weather the phone read from the person's own words in «Повод и погода» (src/lib/weather.js), or the
+// forecast for their place (src/lib/forecast.js, `from: "forecast"`, with the day's `min` and `max`):
+// { temp, feels, min, max, wind, rain, snow, level, from }. These rules come after the stylist rules and win over them:
 // «+6 и ветрено» once gave a t-shirt and no jacket. Without words: the usual weather of the date and country.
 const WEATHER_LEVELS = ["frost", "cold", "cool", "mild", "warm"];
 const COUNTRY_NAMES = { be: "Belgium", nl: "the Netherlands", fr: "France", de: "Germany", lu: "Luxembourg", at: "Austria", es: "Spain", it: "Italy", pt: "Portugal", ie: "Ireland", pl: "Poland", gb: "the United Kingdom", us: "the United States" };
@@ -370,15 +371,17 @@ function weatherText(input) {
   const temp = deg(w.temp);
   const feels = deg(w.feels);
   const conditions = [w.wind === true ? "windy" : "", w.rain === true ? "rain" : "", w.snow === true ? "snow" : ""].filter(Boolean).join(", ");
+  const forecast = w.from === "forecast";
+  const range = forecast && deg(w.min) && deg(w.max) ? `Between ${deg(w.min)} and ${deg(w.max)}` : "";
   const lines = [
-    `- ${[temp ? `About ${temp}${feels && feels !== temp ? ` (feels like ${feels})` : ""}` : "", conditions].filter(Boolean).join("; ") || "As described in the occasion"}.`,
+    `- ${[range ? `${range}${feels ? `, feels like ${feels} on average` : ""}` : temp ? `About ${temp}${feels && feels !== temp ? ` (feels like ${feels})` : ""}` : "", conditions].filter(Boolean).join("; ") || "As described in the occasion"}.`,
     level ? `- ${WEATHER_RULES[level]}` : "",
     w.rain === true ? "- Rain: a jacket or coat, closed shoes, no suede." : "",
     w.snow === true ? "- Snow: warm closed shoes, boots best." : "",
     w.wind === true ? "- Wind: a closed outer layer; a scarf works well." : "",
     "- These weather rules come first, before the stylist rules above.",
   ].filter(Boolean);
-  return `WEATHER (from the person's own words)\n${lines.join("\n")}`;
+  return `WEATHER (${forecast ? "forecast for that day at the person's place, 8:00-20:00" : "from the person's own words"})\n${lines.join("\n")}`;
 }
 
 // «Простая» palette (src/lib/palette-mode.js): plain everyday colours only, named plainly.
@@ -803,6 +806,8 @@ const TASKS = {
       const n = Math.max(1, Math.min(8, int(input.count, 5)));
       const occasion = text(input.occasion, 150);
       const shown = [...new Set(fb.map((f) => [...f.itemIds].sort().join("+")))].slice(0, 30);
+      // «Примерить» from «Хочу купить»: a piece the person wants to buy, built into every outfit
+      const tried = items.find((i) => i.id && i.id === text(input.include, 80)) || null;
       const prompt = `Build everyday outfits ONLY from the user's own wardrobe below.
 
 USER PROFILE
@@ -821,8 +826,13 @@ ${occasion ? `OCCASION / WEATHER: ${quote(occasion)}\n` : ""}HOW A STYLIST BUILD
 ${STYLIST_RULES}
 ${colorsText(input, "plan")}
 
-${weatherText(input)}
-
+${tried && !input.weather ? "" : weatherText(input)}
+${tried ? `PIECE TO TRY ON
+The person wants to BUY ${quote(`${tried.name} (${PART_NAMES[tried.part]}${tried.kind ? `, ${tried.kind}` : ""})`)}, id ${tried.id}, and wants to see what it would make with what they already own before buying.
+- EVERY outfit MUST include this piece (id ${tried.id}); all other pieces come from the rest of the wardrobe.
+- Show different ways to wear it: casual and smarter, different colours and layers around it, so the person sees how many outfits it unlocks.
+- "why": one sentence on how this new piece works with the owned pieces of that outfit.
+` : ""}
 TASK
 Create ${n} distinct, wearable outfits, styled by the rules above.
 - Each outfit: exactly one bottom plus one top, OR one dress; one outerwear layer when the weather needs it (otherwise optional), shoes and at most one accessory when they exist. Use "kind" to tell a t-shirt from a sweater and a coat or jacket from a blazer.

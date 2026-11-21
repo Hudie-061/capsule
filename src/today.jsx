@@ -3,7 +3,8 @@
 // Back of the card: the mannequin with callouts, or an AI try-on on your photo.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { clearTryOns, defaultMode, formatDay, getDayPlan, getTiming, getTryOn, saveDayPlan, saveTryOn, targetDate } from "./lib/daily.js";
+import { clearTryOns, dateKey, defaultMode, formatDay, getDayPlan, getTiming, getTryOn, getTryPlan, saveDayPlan, saveTryOn, saveTryPlan, targetDate } from "./lib/daily.js";
+import { dayWeather, getForecast, refreshSpot, turnOffForecast, turnOnForecast } from "./lib/forecast.js";
 import { SetupError, tryOnOutfit } from "./lib/gemini.js";
 import { normalizeImage } from "./lib/image.js";
 import { outfitAnchors, renderOutfit } from "./lib/mannequin.js";
@@ -114,15 +115,55 @@ function Mannequin({ board, pieces, body, open, onToggle, onPick }) {
 
 // What the phone understood from «Повод и погода», said back before the outfits are made again.
 const isWarmCoat = (p) => isOuter(p) && kindOf(p) !== "blazer";
-function WeatherLine({ text, hasOuter }) {
+const signed = (t) => `${t > 0 ? "+" : ""}${t}`;
+const outerPlan = (w, hasOuter) => (w.needOuter ? (hasOuter ? "в каждом образе будет куртка или пальто" : "куртки или пальто в гардеробе нет — добавь их через ＋") : w.noOuter ? "без куртки и пальто" : "верхняя одежда — по желанию");
+function WeatherLine({ text, hasOuter, forecast }) {
   const w = readWeather(text);
-  if (!w.known) return <p className="tiny-text">Напиши градусы и погоду — например «+6, ветер», и я одену по погоде.</p>;
-  const plan = w.needOuter ? (hasOuter ? "в каждом образе будет куртка или пальто" : "куртки или пальто в гардеробе нет — добавь их через ＋") : w.noOuter ? "без куртки и пальто" : "верхняя одежда — по желанию";
-  return <p className="weather-line fade" key={w.label}><Icon name="check" size={14} width={2.6} /> Понял: {w.label}{w.feels !== null && w.feels !== w.temp ? ` (ощущается как ${w.feels > 0 ? "+" : ""}${w.feels} °C)` : ""} — {plan}.</p>;
+  if (!w.known) return <p className="tiny-text">{forecast ? "Можно уточнить своими словами — они важнее прогноза." : "Напиши градусы и погоду — например «+6, ветер», и я одену по погоде."}</p>;
+  return <p className="weather-line fade" key={w.label}><Icon name="check" size={14} width={2.6} /> Понял: {w.label}{w.feels !== null && w.feels !== w.temp ? ` (ощущается как ${signed(w.feels)} °C)` : ""} — {outerPlan(w, hasOuter)}.</p>;
+}
+
+// The weather the outfits follow: the person's own words first, then the forecast for that day.
+// `source` marks what the outfits were checked for (see dressForWeather).
+function pickWeather(occasion, day, date) {
+  const typed = readWeather(occasion);
+  if (typed.known) return { weather: typed, source: occasion };
+  if (day && date) return { weather: day, source: `forecast:${dateKey(date)}:${day.label}` };
+  return { weather: null, source: "" };
+}
+
+// «Погода по местоположению» in «Повод и погода»: on, with the day's forecast, or the button to turn it on.
+function ForecastBlock({ auto, day, evening, hasOuter, busy, error, onOn, onOff }) {
+  if (auto && day) {
+    return (
+      <div className="forecast-card">
+        <div className="forecast-card__text">
+          <span className="strong-text">Прогноз на {evening ? "завтра" : "сегодня"}: {day.label}</span>
+          <span className="tiny-text">Днём ощущается как {signed(day.feels)} °C — {outerPlan(day, hasOuter)}. Данные: Open-Meteo</span>
+        </div>
+        <button type="button" className="text-button" onClick={onOff}>Выключить</button>
+      </div>
+    );
+  }
+  return (
+    <>
+      <button type="button" className="forecast-on" onClick={onOn} disabled={busy}>
+        <span className="row-card__icon"><Icon name="map" size={20} width={2} /></span>
+        <span className="forecast-on__text">
+          <b>{busy ? "Узнаю погоду…" : auto ? "Обновить прогноз" : "Погода по местоположению"}</b>
+          <small>{auto ? "Прогноз не загрузился — попробую ещё раз." : "Спрошу доступ к месту один раз и округлю его до ~10 км. Прогноз — Open-Meteo, бесплатно."}</small>
+        </span>
+      </button>
+      {error && <p className="status-line status-line--error">{error}</p>}
+    </>
+  );
 }
 
 // ---- screen ---------------------------------------------------------------------------------
-export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpenAccess, onToast }) {
+// `trial`: «Примерить» from «Хочу купить» in «Гардероб» — the same card, but every outfit is built around that
+// piece with the pieces the person already owns: no day, no weather, the piece itself cannot be swapped out,
+// and instead of «Надену» — «Найти похожую» (onFindTrial) and «Купил» (onBoughtTrial). Plans live per piece.
+export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpenAccess, onToast, trial = null, onCloseTrial, onFindTrial, onBoughtTrial }) {
   const [mode, setMode] = useState(null);
   const [plan, setPlan] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -146,16 +187,22 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const [lastLiked, setLastLiked] = useState("");
   const [indoor, setIndoor] = useState(false); // mannequin without coat, scarf and hat
   const [adding, setAdding] = useState(false); // sheet for putting outerwear back
+  const [forecast, setForecast] = useState(null); // src/lib/forecast.js, when the person turned it on
+  const [weatherAuto, setWeatherAuto] = useState(null);
+  const [forecastBusy, setForecastBusy] = useState(false);
+  const [forecastError, setForecastError] = useState("");
   const photoRef = useRef(null);
   const ticketRef = useRef(0); // ignores a slow plan request after the day was switched
   const [figure, setFigure] = useState({}); // gender, height, weight from the profile shape the mannequin
 
-  const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
+  // the pieces outfits are made of: the wardrobe, plus the wished piece when trying it on
+  const pool = useMemo(() => (trial ? [...items.filter((i) => i.id !== trial.id), trial] : items), [items, trial]);
+  const byId = useMemo(() => new Map(pool.map((item) => [item.id, item])), [pool]);
+  const itemsRef = useRef(pool);
+  itemsRef.current = pool;
   const date = useMemo(() => (mode ? targetDate(mode) : null), [mode]);
   const evening = mode === "evening";
-  const counts = useMemo(() => ({ tops: items.filter((i) => i.part === "upperbody" || (i.part === "wholebody_up" && !isDressItem(i))).length, bottoms: items.filter((i) => i.part === "lowerbody").length, dresses: items.filter(isDressItem).length }), [items]);
+  const counts = useMemo(() => ({ tops: pool.filter((i) => i.part === "upperbody" || (i.part === "wholebody_up" && !isDressItem(i))).length, bottoms: pool.filter((i) => i.part === "lowerbody").length, dresses: pool.filter(isDressItem).length }), [pool]);
   const enough = counts.dresses > 0 || (counts.tops > 0 && counts.bottoms > 0);
 
   const outfit = plan?.outfits?.[plan.index] || null;
@@ -167,6 +214,33 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
 
   useEffect(() => { getTiming().then((t) => setMode(defaultMode(t))); }, []);
   useEffect(() => { getProfile().then((p) => setFigure({ gender: p.gender, height: p.height, weight: p.weight })); }, []);
+  // The forecast: the saved one (fresh for 2 hours), and a quiet position update when the phone moved.
+  useEffect(() => {
+    let alive = true;
+    getSettings().then((s) => alive && setWeatherAuto(s.weatherAuto));
+    getForecast().then((f) => alive && setForecast(f)).catch((e) => alive && setForecastError(e.message));
+    refreshSpot().then((moved) => { if (moved) getForecast({ force: true }).then((f) => alive && setForecast(f)).catch(() => {}); });
+    return () => { alive = false; };
+  }, []);
+  const dayW = useMemo(() => dayWeather(forecast, date), [forecast, date]);
+  const dayWRef = useRef(dayW);
+  dayWRef.current = dayW;
+
+  const enableForecast = async () => {
+    setForecastBusy(true); setForecastError("");
+    try {
+      setForecast(await turnOnForecast());
+      setWeatherAuto(true);
+    } catch (e) {
+      setForecastError(e.message);
+    } finally {
+      setForecastBusy(false);
+    }
+  };
+  const disableForecast = async () => {
+    await turnOffForecast();
+    setForecast(null); setWeatherAuto(false); setForecastError("");
+  };
   useEffect(() => {
     getModelReference().then((blob) => setHasReference(Boolean(blob)));
     const onSettings = () => getModelReference().then((blob) => setHasReference(Boolean(blob)));
@@ -181,25 +255,28 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   const store = useCallback(async (next) => {
     planRef.current = next;
     setPlan(next);
-    if (date) await saveDayPlan(date, next);
-  }, [date]);
+    if (trial) await saveTryPlan(trial.id, next);
+    else if (date) await saveDayPlan(date, next);
+  }, [date, trial]);
 
   const generate = useCallback(async (occasion = plan?.occasion || "") => {
-    if (!date) return;
+    if (!date && !trial) return;
     const ticket = ++ticketRef.current;
     setStatus("loading"); setError(""); setFlipped(false); setCalloutsOpen(false);
     try {
-      const when = `${evening ? "Образ на завтра" : "Образ на сегодня"}, ${formatDay(date).toLowerCase()}`;
-      // the weather only from the person's own words; the palette in the chosen mode (simple or extended)
+      const when = trial ? `Примерка: «${trial.name}» — вещь, которую хочу купить, с моим гардеробом` : `${evening ? "Образ на завтра" : "Образ на сегодня"}, ${formatDay(date).toLowerCase()}`;
+      // the weather from the person's own words, else the forecast (not for a try-on: any day); the palette in the chosen mode
       const palette = await getActivePalette();
+      const { weather, source } = trial ? { weather: null, source: "" } : pickWeather(occasion, dayWRef.current, date);
       const outfits = await planOutfits({
         items: itemsRef.current, profile: await getProfile(), feedback: await getFeedback(), learned: await getLearned(),
         occasion: occasion ? `${when}. ${occasion}` : when, count: 5, palette,
-        weather: readWeather(occasion), source: occasion, colors: palette?.mode || "", country: (await getSettings()).country,
+        weather, source, colors: palette?.mode || "", country: (await getSettings()).country, include: trial?.id || "",
       });
-      if (!outfits.length) throw new Error("Не получилось собрать образ. Добавь ещё вещей или попробуй снова.");
+      if (!outfits.length) throw new Error(trial ? "Не получилось собрать образы с этой вещью. Добавь в гардероб вещи, с которыми её носить, или попробуй снова." : "Не получилось собрать образ. Добавь ещё вещей или попробуй снова.");
       const next = { outfits, index: 0, chosen: null, occasion };
-      await saveDayPlan(date, next);
+      if (trial) await saveTryPlan(trial.id, next);
+      else await saveDayPlan(date, next);
       if (ticket !== ticketRef.current) return;
       setPlan(next);
       setLikeAt(null); setLikeReasons(new Set());
@@ -209,33 +286,41 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
       setError(e.message);
       setStatus(e instanceof SetupError ? "setup" : "error");
     }
-  }, [date, evening, plan?.occasion]);
+  }, [date, evening, plan?.occasion, trial]);
 
-  // Load the plan for the chosen day, or make one.
+  // Load the plan for the chosen day (or for the piece being tried on), or make one.
   useEffect(() => {
-    if (!date || !loaded) return undefined;
+    if ((!date && !trial) || !loaded) return undefined;
     let alive = true;
     ticketRef.current += 1;
     setPlan(null); setFlipped(false); setCalloutsOpen(false); setLikeAt(null); setLikeReasons(new Set());
-    Promise.all([getDayPlan(date), getActivePalette().catch(() => null)]).then(([saved, palette]) => {
+    (trial ? getTryPlan(trial.id) : getDayPlan(date)).then((saved) => {
       if (!alive) return;
-      let clean = cleanPlan(saved, new Map(itemsRef.current.map((i) => [i.id, i])));
-      // A plan made before the weather check (or by an older Worker): «+6 и ветрено» without a jacket gets
-      // one from the wardrobe now, without asking the stylist again. Outfits edited by hand stay as they are.
-      if (clean?.occasion) {
-        const outfits = dressForWeather(clean.outfits, itemsRef.current, readWeather(clean.occasion), { source: clean.occasion, pal: palette ? paletteLab(palette) : null, contrast: contrastLevel(palette?.contrast) });
-        if (outfits.some((o, i) => o !== clean.outfits[i] && o.itemIds.join("+") !== clean.outfits[i].itemIds.join("+"))) {
-          clean = { ...clean, outfits, chosen: null };
-          saveDayPlan(date, clean);
-        }
-      }
+      const clean = cleanPlan(saved, new Map(itemsRef.current.map((i) => [i.id, i])));
       if (clean) { setPlan(clean); setStatus("idle"); }
       else if (enough && setupReady) generate(saved?.occasion || "");
       else setStatus("idle");
     });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, loaded, enough, setupReady]);
+  }, [date, loaded, enough, setupReady, trial?.id]);
+
+  // A saved plan follows the weather without asking the stylist again: one made before the weather check
+  // («+6 и ветрено» without a jacket), or before the forecast came. Outfits edited by hand and a plan already
+  // chosen («Надену») stay as they are.
+  const planWeather = useMemo(() => (trial ? { weather: null, source: "" } : pickWeather(plan?.occasion || "", dayW, date)), [plan?.occasion, dayW, date, trial]);
+  useEffect(() => {
+    const current = planRef.current;
+    if (!current || current.chosen || !planWeather.weather) return undefined;
+    let alive = true;
+    getActivePalette().catch(() => null).then((palette) => {
+      const latest = planRef.current;
+      if (!alive || latest !== current) return;
+      const outfits = dressForWeather(latest.outfits, itemsRef.current, planWeather.weather, { source: planWeather.source, pal: palette ? paletteLab(palette) : null, contrast: contrastLevel(palette?.contrast) });
+      if (outfits.some((o, i) => o.itemIds.join("+") !== latest.outfits[i].itemIds.join("+"))) store({ ...latest, outfits });
+    });
+    return () => { alive = false; };
+  }, [plan, planWeather, store]);
 
   // Mannequin board: drawn locally from the cutouts, free and instant.
   useEffect(() => {
@@ -362,6 +447,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     }
   };
 
+  const pickSwap = (id) => { if (id !== trial?.id) setSwapId(id); };
   const swapping = swapId ? byId.get(swapId) : null;
   // Pieces of the same category that are not in the outfit yet: picking one already worn (a bracelet
   // next to the watch) only duplicated it, so the watch just disappeared.
@@ -385,16 +471,33 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
   }, [outfit, pieces, items]);
 
   const tags = [
-    ...(plan?.occasion ? plan.occasion.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 2) : [formatDay(date || new Date()).split(",")[0]]),
+    ...(trial ? ["С твоими вещами"] : plan?.occasion ? plan.occasion.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 2) : [formatDay(date || new Date()).split(",")[0]]),
     ...(outfit?.tuck ? ["Верх заправлен"] : []),
   ];
 
   if (!mode) return null;
 
-  const header = (
+  const header = trial ? (
     <>
       <div className="today-top rise">
-        <span className="muted-text">{evening ? `Завтра · ${formatDay(date).toLowerCase()}` : formatDay(date)}</span>
+        <button type="button" className="round-button round-button--lg" aria-label="Назад к «Хочу купить»" onClick={onCloseTrial}><Icon name="back" size={22} width={2} /></button>
+        <span className="muted-text">Хочу купить</span>
+      </div>
+      <div className="trial-head rise">
+        <span className="trial-head__image">{trial.thumbnail || trial.image ? <img src={trial.thumbnail || trial.image} alt="" /> : <GarmentIcon item={trial} size={44} />}</span>
+        <span className="trial-head__text">
+          <h1 className="screen-title">Примерка</h1>
+          <span className="muted-text">«{trial.name}» с вещами, которые у тебя уже есть</span>
+        </span>
+      </div>
+    </>
+  ) : (
+    <>
+      <div className="today-top rise">
+        <span className="muted-text today-date">
+          {evening ? `Завтра · ${formatDay(date).toLowerCase()}` : formatDay(date)}
+          {dayW && <span className="today-date__weather fade">{dayW.label}</span>}
+        </span>
         <button type="button" className="pill-chip" onClick={() => { setOccasionDraft(plan?.occasion || ""); setOccasionOpen(true); }}>
           <SwapIcon name={plan?.occasion ? "check" : "plus"} size={16} width={2} />
           <span>{plan?.occasion || "Повод и погода"}</span>
@@ -467,13 +570,16 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
               </button>
             </div>
             <div className="look-tiles" data-count={pieces.length + (addGroups.length ? 1 : 0)}>
-              {pieces.map((p, i) => (
-                <button type="button" key={p.id} className={`look-tile ${p.id === arrived ? "arrive" : "rise"}`} style={{ ...(p.id === arrived ? {} : { animationDelay: `${i * 0.03}s` }), ...flyName(p.id) }} onClick={() => setSwapId(p.id)} onAnimationEnd={() => { if (p.id === arrived) setArrived(""); }} aria-label={`Заменить: ${p.name}`}>
-                  {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
-                  <span className="look-tile__name">{p.name}</span>
-                  <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>
-                </button>
-              ))}
+              {pieces.map((p, i) => {
+                const wished = p.id === trial?.id;
+                return (
+                  <button type="button" key={p.id} className={`look-tile ${p.id === arrived ? "arrive" : "rise"}${wished ? " is-wished" : ""}`} style={{ ...(p.id === arrived ? {} : { animationDelay: `${i * 0.03}s` }), ...flyName(p.id) }} onClick={() => pickSwap(p.id)} onAnimationEnd={() => { if (p.id === arrived) setArrived(""); }} aria-label={wished ? `${p.name} — хочешь купить` : `Заменить: ${p.name}`}>
+                    {p.thumbnail || p.image ? <img src={p.thumbnail || p.image} alt="" /> : <GarmentIcon item={p} size={92} dress={isDressItem(p)} />}
+                    <span className="look-tile__name">{p.name}</span>
+                    {wished ? <span className="look-tile__wish">хочу</span> : <span className="look-tile__swap" aria-hidden="true"><Icon name="swap" size={16} width={2} /></span>}
+                  </button>
+                );
+              })}
               {addGroups.length > 0 && (
                 <button type="button" className="look-tile look-tile--add rise" onClick={() => setAdding(true)} aria-label={`Добавить в образ: ${addGroups.map((g) => g.label.toLowerCase()).join(", ")}`}>
                   <Icon name="plus" size={28} width={1.6} />
@@ -494,7 +600,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
             <div className="stage">
               {!me && (
                 <>
-                  <Mannequin board={board} pieces={shown} body={{ ...figure, tuck: outfit.tuck }} open={calloutsOpen} onToggle={() => setCalloutsOpen((v) => !v)} onPick={setSwapId} />
+                  <Mannequin board={board} pieces={shown} body={{ ...figure, tuck: outfit.tuck }} open={calloutsOpen} onToggle={() => setCalloutsOpen((v) => !v)} onPick={pickSwap} />
                   {outdoor.length > 0 && (
                     <button type="button" className={`stage__toggle${indoor ? " is-on" : ""}`} aria-pressed={indoor} onClick={() => setIndoor((v) => !v)}>
                       <Icon name={indoor ? "check" : "home"} size={16} width={2.2} /> В помещении
@@ -543,7 +649,19 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
     <section className="screen today">
       {header}
       {body}
-      {ready && (
+      {ready && trial && (
+        <>
+          <div className="action-row">
+            <button type="button" className="btn btn--outline btn--grow1" onClick={() => setDislikeOpen(true)}>Другой образ</button>
+            <button type="button" className="btn btn--dark btn--grow2" onClick={() => onFindTrial?.(trial)}><Icon name="bag" size={18} width={2} /> {trial.brand ? "Найти такую же" : "Найти похожую"}</button>
+          </div>
+          <p className="hint-text trial-foot">
+            Образ {plan.index + 1} из {plan.outfits.length} · свои вещи можно заменить нажатием
+            <button type="button" className="text-button" onClick={() => onBoughtTrial?.(trial)}><Icon name="check" size={14} width={2.4} /> Купил — в гардероб</button>
+          </p>
+        </>
+      )}
+      {ready && !trial && (
         <>
           <div className="action-row">
             <button type="button" className="btn btn--outline btn--grow1" onClick={() => setDislikeOpen(true)}>Другой образ</button>
@@ -648,11 +766,12 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
       </Sheet>
 
       <Sheet open={occasionOpen} onClose={() => setOccasionOpen(false)} title="Повод и погода" subtitle="Стилист учтёт это и подберёт образ заново">
+        <ForecastBlock auto={weatherAuto} day={dayW} evening={evening} hasOuter={items.some(isWarmCoat)} busy={forecastBusy} error={forecastError} onOn={enableForecast} onOff={disableForecast} />
         <label className="field-v2">
           <span>Куда идёшь, какая погода</span>
           <input value={occasionDraft} onChange={(e) => setOccasionDraft(e.target.value)} placeholder="Учёба, +8 и дождь" maxLength={140} />
         </label>
-        <WeatherLine text={occasionDraft} hasOuter={items.some(isWarmCoat)} />
+        <WeatherLine text={occasionDraft} hasOuter={items.some(isWarmCoat)} forecast={Boolean(dayW)} />
         <div className="chip-row">
           {OCCASION_CHIPS.map((c) => <button type="button" key={c} className="chip" onClick={() => setOccasionDraft((v) => (v.trim() ? `${v.trim().replace(/,$/, "")}, ${c.toLowerCase()}` : c))}>{c}</button>)}
         </div>

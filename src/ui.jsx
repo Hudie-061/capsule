@@ -304,7 +304,7 @@ export function Crossfade({ k, children, className = "" }) {
   useEffect(() => () => clearTimeout(timer.current), []);
   return (
     <div className={`xfade ${className}`}>
-      {ghost && <div className="xfade__old" aria-hidden="true" inert="" key={`old-${ghost.k}`}>{ghost.children}</div>}
+      {ghost && <div className="xfade__old" aria-hidden="true" inert key={`old-${ghost.k}`}>{ghost.children}</div>}
       <div className={ghost ? "xfade__new" : ""} key={`new-${k}`}>{children}</div>
     </div>
   );

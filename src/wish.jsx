@@ -3,9 +3,10 @@
 // («куртку, но чёрную»): the Worker returns only those pieces and an English search query for each.
 // Pieces are saved from the crop of that photo (no AI cut-out: it is not the person's own item and costs
 // nothing). A wish is a wardrobe record with `want: true`: the stylist never uses it in outfits; «Купил»
-// moves it to the wardrobe, and the item card can move any piece back. «Найти» opens «Покупки» with that
-// piece: Zalando and the other shops with the person's size, and the price search (Zalando, About You,
-// or Google Shopping in «Все новые»).
+// moves it to the wardrobe, and the item card can move any piece back. «Примерить» builds outfits of that
+// piece with what the person owns (the «Сегодня» card in try-on mode). «Найти похожую» opens «Покупки» with
+// that piece: Zara, H&M, Zalando, Uniqlo and SHEIN with the person's size and filters, and the price search
+// (Zalando, About You, or Google Shopping in «Все новые»). Pieces also come here from «＋» («Хочу купить»).
 import { useEffect, useRef, useState } from "react";
 import { localFetch } from "./lib/local-api.js";
 import { GarmentIcon, Icon, Sheet, WaitLine } from "./ui.jsx";
@@ -124,7 +125,7 @@ function WishUpload({ open, onClose, onAdded, setupReady, onOpenAccess }) {
 }
 
 // The shelf itself: what the person wants, with «Найти» and «Купил».
-export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, onBought, onAdded }) {
+export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, onTry, canTry, onBought, onAdded }) {
   const [uploading, setUploading] = useState(false);
   return (
     <>
@@ -135,7 +136,7 @@ export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, onB
       </button>
 
       {!items.length ? (
-        <p className="muted-text wish-empty">Здесь будет то, что хочешь купить. Когда купишь — нажми «Купил», и вещь переедет в гардероб и в образы.</p>
+        <p className="muted-text wish-empty">Здесь будет то, что хочешь купить: фото образа отсюда или вещи через «＋» → «Хочу купить» (можно скриншот с сайта магазина). Нажми «Примерить» — соберу образы с твоими вещами. Купишь — «Купил», и вещь переедет в гардероб.</p>
       ) : (
         <div className="wish-grid">
           {items.map((item, i) => (
@@ -144,10 +145,12 @@ export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, onB
                 {item.thumbnail || item.image ? <img src={item.thumbnail || item.image} alt="" /> : <GarmentIcon item={item} size={64} />}
               </button>
               <span className="wish-card__name">{item.name}</span>
+              {item.brand && <span className="wish-card__brand">{item.brand}</span>}
               {item.wishNote && <span className="wish-card__note">{item.wishNote}</span>}
               <div className="wish-card__actions">
-                <button type="button" className="btn btn--dark btn--small" onClick={() => onFind(item)}><Icon name="bag" size={16} width={2} /> Найти</button>
-                <button type="button" className="btn btn--outline btn--small" onClick={() => onBought(item)}><Icon name="check" size={16} width={2.2} /> Купил</button>
+                <button type="button" className="btn btn--dark btn--small" disabled={!canTry} onClick={() => onTry(item)} title={canTry ? "" : "Сначала добавь свои вещи в гардероб"}><Icon name="person" size={16} width={2} /> Примерить</button>
+                <button type="button" className="btn btn--outline btn--small" onClick={() => onFind(item)}><Icon name="bag" size={16} width={2} /> {item.brand ? "Найти такую же" : "Найти похожую"}</button>
+                <button type="button" className="text-button wish-card__bought" onClick={() => onBought(item)}><Icon name="check" size={14} width={2.4} /> Купил — в гардероб</button>
               </div>
             </article>
           ))}

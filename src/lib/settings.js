@@ -41,6 +41,10 @@ export async function getSettings() {
     // «Моя палитра»: "simple" (plain everyday colours) or "extended" (the season's full fan); "" until chosen
     // (then src/lib/palette-mode.js picks by gender).
     paletteMode: saved.paletteMode === "simple" || saved.paletteMode === "extended" ? saved.paletteMode : "",
+    // «Сегодня»: the forecast for the person's place (src/lib/forecast.js). weatherAuto: true / false once the
+    // person decided, null before; weatherSpot: { lat, lon } rounded to ~10 km.
+    weatherAuto: typeof saved.weatherAuto === "boolean" ? saved.weatherAuto : null,
+    weatherSpot: saved.weatherSpot && Number.isFinite(saved.weatherSpot.lat) && Number.isFinite(saved.weatherSpot.lon) ? saved.weatherSpot : null,
   };
 }
 

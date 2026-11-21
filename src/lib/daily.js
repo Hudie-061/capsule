@@ -64,6 +64,18 @@ export async function saveDayPlan(date, plan) {
   await Promise.all(keys.map((k) => kv.del(k)));
 }
 
+// ---- «Примерить» a piece from «Хочу купить»: outfits of that piece with the wardrobe -------------
+// Same shape as a day plan, one per wished piece; a few at most are kept.
+const TRY = "try:";
+export const getTryPlan = (itemId) => kv.get(TRY + itemId, null);
+export async function saveTryPlan(itemId, plan) {
+  await kv.set(TRY + itemId, { ...plan, at: new Date().toISOString() });
+  const keys = (await kv.keys()).filter((k) => String(k).startsWith(TRY));
+  if (keys.length <= 12) return;
+  const plans = await Promise.all(keys.map(async (k) => [k, (await kv.get(k, null))?.at || ""]));
+  await Promise.all(plans.sort((a, b) => a[1].localeCompare(b[1])).slice(0, keys.length - 12).map(([k]) => kv.del(k)));
+}
+
 // ---- try-on cache: one generated photo per outfit (set of item ids) ---------------------
 function hash(text) {
   let h = 0x811c9dc5;

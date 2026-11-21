@@ -129,6 +129,8 @@ async function persistImported(job, includeModeled) {
     size: existing?.size || m.size || "",
     fit: existing?.fit || "",
     query: m.query || existing?.query || "",
+    // «Хочу купить» chosen in «＋» (the job remembers it); later moves are kept on the record
+    want: existing ? existing.want === true : job.want === true,
     image: garmentPath,
     thumbnail: garmentPath,
     modeledImage: modeledImage || existing?.modeledImage || null,
@@ -378,6 +380,7 @@ async function route(method, pathname, input) {
   if (!action && method === "DELETE") { await removeJob(job.id); return { deleted: true, id: job.id }; }
   if (action === "add" && method === "POST") {
     job.auto = true;
+    job.want = input?.want === true; // «Хочу купить» instead of the wardrobe
     await saveJob(job);
     if (job.stages.crop.status === "review") return decide(job, "crop", "approve");
     return resolveJob(job);
