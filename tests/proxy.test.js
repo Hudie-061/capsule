@@ -62,6 +62,7 @@ beforeEach(() => {
     if (prompt.startsWith("Is the following user text") || prompt.startsWith("Is the following text a product search")) return reply({ onTopic: topicVerdict });
     if (prompt.includes("Identify every distinct")) return reply({ items: [{ name: "Футболка", part: "upperbody", kind: "T-Shirt 2!", color: "#c9b08c", tags: ["оверсайз"], box_2d: [10, 20, 900, 980], ...(prompt.includes("wants to buy") ? { query: "women black biker jacket!! кожа" } : {}) }] });
     if (prompt.includes("should show the label or tag")) return reply(labelReply);
+    if (prompt.includes("finds this exact product")) return reply({ isClothing: true, brand: "Pull&Bear", print: "Star Wars", query: "Pull&Bear white Star Wars graphic hoodie — oversized!" });
     if (prompt.includes("Build everyday outfits")) return reply({ outfits: [{ title: "Т".repeat(500), why: "ok", itemIds: ["a", "b", "hacker-id"], tuck: true, tips: [{ title: "Тон в тон", why: "Оттенки синего вытягивают силуэт" }, { title: "", why: "пусто" }, { title: "a", why: "b" }, { title: "c", why: "d" }] }] });
     if (prompt.includes("recommend at most 6")) {
       return reply({ summary: "s", items: [
@@ -372,6 +373,23 @@ describe("no general-purpose access", () => {
     upstream = [];
     await worker.fetch(call("/api/gaps", { wardrobe, colors: "extended" }), env());
     expect(upstream[0].prompt).not.toContain("SIMPLE palette");
+  });
+
+  it("reads a wished piece's photo for an exact search: brand, print, query", async () => {
+    const res = await worker.fetch(call("/api/identify", { image: PNG, item: { name: "Белое худи", part: "upperbody", kind: "hoodie" } }), env());
+    expect(res.status).toBe(200);
+    const prompt = upstream[0].prompt;
+    expect(prompt).toContain("finds this exact product");
+    expect(prompt).toMatch(/licensed theme or character \("Star Wars"/);
+    expect(prompt).toContain("Белое худи");
+    expect(prompt).toMatch(/Never guess a brand from the style/);
+    expect(await res.json()).toEqual({ brand: "Pull&Bear", print: "Star Wars", query: "Pull&Bear white Star Wars graphic hoodie oversized" });
+  });
+
+  it("asks the detection for the print in the query, the brand separately", async () => {
+    await worker.fetch(call("/api/detect", { image: PNG }), env());
+    expect(upstream[0].prompt).toMatch(/any print, graphic or text on it, e\.g\. "Star Wars print"/);
+    expect(upstream[0].prompt).toContain("Do not put the maker's brand in the query");
   });
 
   it("try-on still works for older app versions that send no garment names", async () => {

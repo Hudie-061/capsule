@@ -653,7 +653,7 @@ export function TodayView({ items, loaded, setupReady, onNavigate, onAdd, onOpen
         <>
           <div className="action-row">
             <button type="button" className="btn btn--outline btn--grow1" onClick={() => setDislikeOpen(true)}>Другой образ</button>
-            <button type="button" className="btn btn--dark btn--grow2" onClick={() => onFindTrial?.(trial)}><Icon name="bag" size={18} width={2} /> {trial.brand ? "Найти такую же" : "Найти похожую"}</button>
+            <button type="button" className="btn btn--dark btn--grow2" onClick={() => onFindTrial?.(trial)}><Icon name="bag" size={18} width={2} /> {trial.brand || trial.image ? "Найти такую же" : "Найти похожую"}</button>
           </div>
           <p className="hint-text trial-foot">
             Образ {plan.index + 1} из {plan.outfits.length} · свои вещи можно заменить нажатием

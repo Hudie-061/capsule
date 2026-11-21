@@ -973,6 +973,7 @@ body.has-sheet .app-main { transform: scale(.965); filter: saturate(.85); }
 .wish-card__name { font-weight: 600; font-size: 14px; line-height: 1.25; }
 .wish-card__note { font-size: 12px; line-height: 1.35; color: var(--text-2); }
 .wish-card__brand { align-self: flex-start; margin-top: -4px; padding: 2px 8px; border-radius: 999px; background: var(--chip); font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.search-line { margin: 6px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-tag); }
 /* offers of a branded piece: the brand first, then look-alikes of other brands */
 .offer-group { display: block; margin: 6px 2px 0; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); }
 .wish-card__actions { display: flex; flex-direction: column; gap: 6px; margin-top: auto; }

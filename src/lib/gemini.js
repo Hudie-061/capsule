@@ -69,6 +69,13 @@ export async function analyzeClothing(imageBlob, { note = "" } = {}) {
   });
 }
 
+// «Найти такую же»: the photo of a piece in «Хочу купить» → { brand, print, query } — an English search query
+// for this exact product (the visible brand, the print such as "Star Wars", colour, type, details).
+export async function identifyItem(imageBlob, item = {}) {
+  const result = await task("identify", { image: await toPayload(imageBlob), item: plainItem(item) });
+  return { brand: String(result.brand || ""), print: String(result.print || ""), query: String(result.query || "") };
+}
+
 // A photo of a clothing label → { isLabel, size, brand } (the size as printed, e.g. "M", "W32 L32", "EU 42").
 export async function readLabel(imageBlob) {
   const result = await task("label", { image: await toPayload(imageBlob) });

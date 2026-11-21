@@ -125,7 +125,7 @@ function WishUpload({ open, onClose, onAdded, setupReady, onOpenAccess }) {
 }
 
 // The shelf itself: what the person wants, with «Найти» and «Купил».
-export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, onTry, canTry, onBought, onAdded }) {
+export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, finding = "", onTry, canTry, onBought, onAdded }) {
   const [uploading, setUploading] = useState(false);
   return (
     <>
@@ -149,7 +149,9 @@ export function WishShelf({ items, setupReady, onOpenAccess, onOpen, onFind, onT
               {item.wishNote && <span className="wish-card__note">{item.wishNote}</span>}
               <div className="wish-card__actions">
                 <button type="button" className="btn btn--dark btn--small" disabled={!canTry} onClick={() => onTry(item)} title={canTry ? "" : "Сначала добавь свои вещи в гардероб"}><Icon name="person" size={16} width={2} /> Примерить</button>
-                <button type="button" className="btn btn--outline btn--small" onClick={() => onFind(item)}><Icon name="bag" size={16} width={2} /> {item.brand ? "Найти такую же" : "Найти похожую"}</button>
+                <button type="button" className="btn btn--outline btn--small" disabled={Boolean(finding)} onClick={() => onFind(item)} aria-busy={finding === item.id}>
+                  <Icon name="bag" size={16} width={2} /> {finding === item.id ? "Смотрю на фото…" : item.brand || item.image ? "Найти такую же" : "Найти похожую"}
+                </button>
                 <button type="button" className="text-button wish-card__bought" onClick={() => onBought(item)}><Icon name="check" size={14} width={2.4} /> Купил — в гардероб</button>
               </div>
             </article>

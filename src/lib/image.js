@@ -31,6 +31,20 @@ export async function normalizeImage(blob, maxSide = 2048) {
   return canvasToBlob(canvas);
 }
 
+// A piece's photo for the AI: at most `maxSide` px, a transparent cut-out laid on light grey (on black a
+// black hoodie would vanish, on white a white one), as JPEG.
+export async function flattenForAi(blob, maxSide = 768) {
+  const bitmap = await loadBitmap(blob);
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = makeCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#D8D8D8";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return canvasToBlob(canvas, "image/jpeg", 0.9);
+}
+
 export async function imageSize(blob) {
   const bitmap = await loadBitmap(blob);
   const size = { width: bitmap.width, height: bitmap.height };

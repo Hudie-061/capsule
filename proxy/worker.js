@@ -1,7 +1,7 @@
 // Capsule proxy — a Cloudflare Worker that holds the owner's Gemini API key.
 //
 // It is NOT a general Gemini pass-through. It exposes only the wardrobe tasks the
-// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette, prices, offer), builds every prompt
+// app needs (detect, cutout, modeled, tryon, plan, gaps, learn, palette, prices, offer, label, identify), builds every prompt
 // itself, pins the models, constrains outputs with JSON schemas, clips all user text,
 // and checks that free text sent to the image model is about clothing. Someone who
 // has an access code still cannot use it as a chatbot or a general image generator.
@@ -232,7 +232,7 @@ For each item return:
 - tags: 1-4 short lowercase details in Russian (fit, fabric, style), e.g. "оверсайз", "варёный", "бэгги".
 - size: ONLY if a size label or tag of this item is clearly readable in the photo, the size printed on it, preferring the European or international size: a letter size ("M", "XL"), waist and length for jeans ("W32 L32"), or the EU number ("EU 42"). Otherwise an empty string. Never guess a size from how the item looks.
 - brand: ONLY if a label or logo of this item clearly shows the brand name, that name; otherwise an empty string.
-- query: a short English search query for online clothing shops, 3-7 words: colour, garment type and the details that make it this piece (fit, material, pattern); add "men" or "women" when the cut makes it clear. English only, no brand names.`;
+- query: a short English search query for online clothing shops, 3-8 words: colour, garment type and the details that make it this piece (fit, material, pattern, and any print, graphic or text on it, e.g. "Star Wars print", "Nirvana band graphic", "Mickey Mouse", "slogan"); add "men" or "women" when the cut makes it clear. English only. Do not put the maker's brand in the query (it goes to "brand"), but do name a licensed print or theme.`;
 
 // «Хочу купить»: a photo the person found (Pinterest, someone in the street) and their own words about
 // what they want from it. The words narrow the pieces and shape the search query (e.g. another colour).
@@ -252,6 +252,22 @@ async function requireClothingWish(env, note) {
 function englishQuery(value) {
   const q = text(value, 80).replace(/[^A-Za-z0-9 '&-]/g, " ").replace(/\s+/g, " ").trim();
   return /[A-Za-z]/.test(q) ? q : "";
+}
+
+// «Найти такую же» for a piece already in «Хочу купить» (owner, 21.11.2026: a white Pull&Bear hoodie with a
+// Star Wars print was searched as just "white hoodie"). The photo of the piece → a search query for THIS
+// product: the visible brand, the print or graphic, colour, type, the details. One text call per piece.
+const IDENTIFY_SCHEMA = {
+  type: "OBJECT",
+  properties: { isClothing: { type: "BOOLEAN" }, brand: { type: "STRING" }, print: { type: "STRING" }, query: { type: "STRING" } },
+  required: ["isClothing", "brand", "print", "query"],
+};
+function identifyPrompt(known) {
+  return `This photo shows one piece of clothing, shoes or a fashion accessory that a person wants to BUY. Describe it so that an online shop search finds this exact product, or the closest ones.${known ? `\nWhat the app already knows about it: ${quote(known)}` : ""}
+If the photo shows no clothing, shoes or accessory, set isClothing to false and leave the rest empty. Otherwise set isClothing to true and return:
+- brand: the maker's brand ONLY if a logo, wordmark or label on the piece clearly shows it (e.g. "Tommy Hilfiger", "Pull&Bear", "Nike"); otherwise an empty string. Never guess a brand from the style.
+- print: the print, graphic or text on the piece in a few English words: a licensed theme or character ("Star Wars", "Marvel", "Mickey Mouse"), a band, a slogan's words, a pattern ("camo", "stripes"); an empty string when it is plain.
+- query: an English search query of 4-9 words for this product: the brand when known, then the print, the colour, the garment type and its distinctive details (fit, material, neckline, closure). No gender words, no sizes, no prices. Example: "Pull&Bear white Star Wars graphic oversized hoodie".`;
 }
 
 // A photo of a clothing label (the size tag inside a garment or a shoe tongue) → the size and the brand.
@@ -751,6 +767,17 @@ const TASKS = {
         size: text(i.size, 24), brand: text(i.brand, 40), query: englishQuery(i.query),
       }));
       return { items };
+    },
+  },
+
+  identify: {
+    kind: "text",
+    async run(env, input) {
+      const known = item(input.item || {});
+      const knownText = [input.item?.name ? known.name : "", known.kind, known.brand ? `brand ${known.brand}` : ""].filter(Boolean).join(", ");
+      const result = await askJson(env, identifyPrompt(knownText), IDENTIFY_SCHEMA, { images: [image(input.image)], temperature: 0 });
+      if (result.isClothing !== true) throw new TaskError(422, "На фото не видно одежды — не получилось описать вещь для поиска.");
+      return { brand: text(result.brand, 40), print: englishQuery(result.print).slice(0, 40), query: englishQuery(result.query) };
     },
   },
 

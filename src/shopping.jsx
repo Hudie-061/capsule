@@ -14,7 +14,7 @@
 // 5. «Как сел размер?»: a few days after «Купил здесь» the app asks how the size fit and moves the
 //    saved size one step if it was too small or too big.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WISH_SHOPS, chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor } from "./lib/chains.js";
+import { WISH_SHOPS, chainLinks, chainOf, chainOffers, offerFallback, queryGender, searchChains, shopOrder, shopQueryFor, siteSearch } from "./lib/chains.js";
 import { brandLatin, isOfBrand, withBrand, withoutBrand } from "./lib/brands.js";
 import { COUNTRIES, countryById, money, storeLinks } from "./lib/countries.js";
 import { kv } from "./lib/db.js";
@@ -399,12 +399,14 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
   const fromWish = gap?.from === "wish";
   // «Такой же»: the shops that sell the brand (Zalando and About You; the chain's own site when the brand is
   // a chain) and Google Shopping — all shops at once
-  const sameIds = brandChain ? [brandChain.id] : ["zalando", "aboutyou"];
+  const sameIds = brandChain?.own ? [brandChain.id] : ["zalando", "aboutyou"];
   const brandTiles = brand && !alike && filter !== "used";
   const links = filter === "used"
     ? storeLinks(linkCountry).filter((s) => s.cond === "used").map((s) => ({ ...s, href: s.url(shownQuery), notes: ["б/у", "поиск на сайте"] }))
     : brandTiles ? [
-      ...chainLinks(linkCountry, brandChain ? plainQuery : baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters, money: (n) => money(n, currency), prefer: sameIds })
+      // the brand is a chain without a search link (Pull&Bear): Google inside its own site first
+      ...(brandChain && !brandChain.own ? [{ id: brandChain.id, name: brandChain.name, cond: "new", href: siteSearch(brandChain.id, linkCountry, plainQuery), notes: ["сайт марки · поиск Google по сайту"] }] : []),
+      ...chainLinks(linkCountry, brandChain?.own ? plainQuery : baseQuery, { shoes: gap?.part === "shoes", gender, filters: linkFilters, money: (n) => money(n, currency), prefer: sameIds })
         .filter((c) => sameIds.includes(c.id)).map((c) => ({ ...c, cond: "new", href: c.url })),
       ...storeLinks(linkCountry).filter((s) => s.cond === "new").map((s) => ({ ...s, href: s.url(shownQuery), notes: [`${brand} во всех магазинах`] })),
     ] : [
@@ -490,6 +492,8 @@ export function ShoppingView({ items, setupReady, focus, refreshKey, onOpenAcces
       {altsLoading && <p className="muted-text gap-why">Подбираю другую вещь вместо «{focus.replace.name}» — под остальной образ…</p>}
       {focus?.replace && alts.status === "error" && <p className="error-text">{alts.error}</p>}
       {gap?.why && !altsLoading && <p className="muted-text gap-why fade" key={gap.item}>{gap.replaceOf ? `Вместо «${gap.replaceOf}»: ${gap.why}` : gap.why}</p>}
+      {/* a piece from «Хочу купить»: what exactly goes to the shops (read from its photo once) */}
+      {gap?.from === "wish" && baseQuery && <p className="search-line fade" key={`q-${baseQuery}`}><Icon name="star" size={13} width={2.2} /> Ищу: «{baseQuery}»</p>}
       {gap && system && (
         <div className="my-size fade" key={`size-${gap.item}`}>
           <button type="button" className={`my-size__chip${size ? " is-on" : ""}`} onClick={() => setSizeOpen(true)} aria-haspopup="dialog">

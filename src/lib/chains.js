@@ -146,6 +146,11 @@ export function queryGender(text, fallback = "") {
 }
 
 const googleInside = (chain, country, s) => `https://www.google.com/search?q=${q(`${s} site:${chain.sites?.[country] || chain.site}`)}&gl=${country}`;
+// A chain without its own search link (Pull&Bear, Bershka…): Google search inside its site.
+export function siteSearch(chainId, country, query) {
+  const chain = CHAINS.find((c) => c.id === chainId);
+  return chain ? googleInside(chain, country, shopQuery(query)) : "";
+}
 
 // A link that searches the chain's own site (or Google inside it) for this text. `filters` (size, sale,
 // budget) are added where the shop's link supports them (Zalando).

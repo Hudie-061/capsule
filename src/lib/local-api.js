@@ -273,7 +273,10 @@ async function route(method, pathname, input) {
   if (patch && method === "PATCH") {
     const record = await getRecord(patch[1]);
     if (!record) throw new HttpError(404, "Вещь не найдена");
-    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette", "size", "fit", "want", "wishNote"];
+    const allowed = ["name", "brand", "part", "color", "secondaryColor", "tags", "palette", "size", "fit", "want", "wishNote", "query", "exact"];
+    // «Найти такую же»: the English query read from the photo, once (`exact`)
+    if ("query" in input) input.query = typeof input.query === "string" && !/[\u0400-\u04FF]/.test(input.query) ? input.query.replace(/[^A-Za-z0-9 '&-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) : "";
+    if ("exact" in input) input.exact = input.exact === true;
     if ("want" in input) input.want = input.want === true;
     if ("wishNote" in input) input.wishNote = typeof input.wishNote === "string" ? input.wishNote.trim().slice(0, 200) : "";
     if (typeof input.brand === "string") input.brand = input.brand.trim().slice(0, 40);

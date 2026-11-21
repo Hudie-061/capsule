@@ -5,8 +5,8 @@ import { OptimizedImage } from "./OptimizedImage.jsx";
 import { localFetch } from "./lib/local-api.js";
 import { plural } from "./lib/plural.js";
 import { getProfile, getSettings } from "./lib/settings.js";
-import { readLabel } from "./lib/gemini.js";
-import { normalizeImage } from "./lib/image.js";
+import { identifyItem, readLabel } from "./lib/gemini.js";
+import { flattenForAi, normalizeImage } from "./lib/image.js";
 import { kindOf } from "./lib/kinds.js";
 import { FIT_OPTIONS, getBody, parseSize, sizeLabel, sizeOptions, sizeSystem } from "./lib/sizes.js";
 import { Onboarding, isOnboardingDone } from "./onboarding.jsx";
@@ -60,6 +60,8 @@ function persistEdit(item) {
     fit: item.fit || "",
     want: Boolean(item.want),
     wishNote: item.wishNote || "",
+    query: item.query || "",
+    exact: Boolean(item.exact),
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(edits));
 }
@@ -689,6 +691,7 @@ export function App() {
   const [activeType, setActiveType] = useState("all");
   const [shelf, setShelf] = useState("have"); // «Есть» or «Хочу купить» in «Гардероб»
   const [trialId, setTrialId] = useState(null); // «Примерить»: a piece from «Хочу купить» tried with the wardrobe
+  const [finding, setFinding] = useState(""); // «Найти такую же»: the piece whose photo is being read
   const [selectedId, setSelectedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -780,8 +783,8 @@ export function App() {
     setItems((current) => current.map((item) => item.id === updatedItem.id ? updatedItem : item));
     persistEdit(updatedItem);
     if (updatedItem.id.startsWith("import-")) {
-      const { name, brand, part, color, secondaryColor, tags, palette, size, fit, want, wishNote } = updatedItem;
-      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette, size, fit, want: Boolean(want), wishNote: wishNote || "" }) }).catch(() => {});
+      const { name, brand, part, color, secondaryColor, tags, palette, size, fit, want, wishNote, query, exact } = updatedItem;
+      localFetch(`/api/import/wardrobe/${updatedItem.id}`, { method: "PATCH", body: JSON.stringify({ name, brand, part, color, secondaryColor, tags, palette, size, fit, want: Boolean(want), wishNote: wishNote || "", query: query || "", exact: Boolean(exact) }) }).catch(() => {});
     }
     if (toast !== false) showToast(toast || "Сохранено");
   };
@@ -797,8 +800,24 @@ export function App() {
     setShelf("want");
     showToast(`В «Хочу купить»: ${records.length} ${plural(records.length, ["вещь", "вещи", "вещей"])}`);
   };
-  // With a brand («Tommy Hilfiger»): the same piece of that brand first, then look-alikes of other brands.
-  const findWish = (item) => {
+  // «Найти такую же»: the first time, the photo of the piece is read for an exact search — the visible brand,
+  // the print («Star Wars»), colour, type, details — and kept on the piece (`exact`). Then «Покупки»: with a
+  // brand («Tommy Hilfiger») the same piece of that brand first, then look-alikes of other brands.
+  const findWish = async (source) => {
+    let item = source;
+    if (item.image && !item.exact && setupReady && !finding) {
+      setFinding(item.id);
+      try {
+        const photo = await flattenForAi(await (await fetch(item.image)).blob());
+        const found = await identifyItem(photo, item);
+        item = { ...item, query: found.query || item.query, brand: item.brand || found.brand, exact: true };
+        saveItem(item, false);
+      } catch {
+        // an older Worker or no connection: search with what the piece already has
+      } finally {
+        setFinding("");
+      }
+    }
     const brand = brandLatin(item.brand);
     const why = brand
       ? `Ищу ${brand}: такую же вещь — в магазинах этой марки и по ценам во всех магазинах, а в «Похожие дешевле» — такие же вещи других марок.`
@@ -866,7 +885,7 @@ export function App() {
               options={[{ id: "have", label: `Есть · ${haveItems.length}` }, { id: "want", label: `Хочу купить · ${wantItems.length}` }]} />
             {shelf === "want" ? (
               <WishShelf items={wantItems} setupReady={setupReady} onOpenAccess={openAccess} onOpen={setSelectedId}
-                onFind={findWish} onTry={tryWish} canTry={haveItems.length > 0} onBought={(item) => moveItem(item, false)} onAdded={addWishes} />
+                onFind={findWish} finding={finding} onTry={tryWish} canTry={haveItems.length > 0} onBought={(item) => moveItem(item, false)} onAdded={addWishes} />
             ) : (<>
             <nav className="category-pills" aria-label="Фильтр по типу вещей">
               {TYPES.map((type) => (
